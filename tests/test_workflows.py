@@ -45,6 +45,42 @@ class WorkflowTest(unittest.TestCase):
         self.assertFalse(payload["4"]["inputs"]["generate_texture_slat"])
         self.assertEqual(payload["6"]["inputs"]["file_format"], "glb")
 
+    def test_textured_gui_workflow_has_complete_bake_chain(self):
+        workflow = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured.workflow.json").read_text()
+        )
+        nodes = {node["id"]: node for node in workflow["nodes"]}
+
+        self.assertEqual(len(nodes), 8)
+        self.assertEqual(len(workflow["links"]), 8)
+        self.assertTrue(all("GGUF" not in node["type"] for node in nodes.values()))
+        self.assertEqual(nodes[2]["type"], "LoadImage")
+        self.assertTrue(nodes[4]["widgets_values"][9])
+        self.assertEqual(nodes[5]["type"], "Trellis2TextureBake")
+        self.assertEqual(nodes[5]["widgets_values"], [
+            60.0, 0, 1, 1, 2048, True, 1.0, 0.0, 1000000,
+            "Cumesh", True, "OPAQUE", "512", True, False, False,
+            False, "Xatlas", False,
+        ])
+        self.assertEqual(nodes[5]["inputs"][0]["type"], "MESHWITHVOXEL")
+        self.assertEqual(nodes[5]["inputs"][1]["type"], "BVH")
+        self.assertEqual(nodes[6]["inputs"][0]["type"], "TRIMESH")
+
+    def test_textured_api_payload_preserves_voxel_attributes_until_bake(self):
+        payload = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured.api.json").read_text()
+        )
+
+        self.assertTrue(all("GGUF" not in node["class_type"] for node in payload.values()))
+        self.assertTrue(payload["4"]["inputs"]["generate_texture_slat"])
+        self.assertEqual(payload["5"]["class_type"], "Trellis2TextureBake")
+        self.assertEqual(payload["5"]["inputs"]["mesh"], ["4", 0])
+        self.assertEqual(payload["5"]["inputs"]["bvh"], ["4", 1])
+        self.assertFalse(payload["5"]["inputs"]["bake_on_vertices"])
+        self.assertEqual(payload["6"]["inputs"]["trimesh"], ["5", 0])
+        self.assertEqual(payload["7"]["inputs"]["images"], ["5", 1])
+        self.assertEqual(payload["8"]["inputs"]["images"], ["5", 2])
+
 
 if __name__ == "__main__":
     unittest.main()

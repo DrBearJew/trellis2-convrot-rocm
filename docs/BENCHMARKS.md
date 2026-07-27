@@ -10,8 +10,9 @@ Machine-readable values are in [`benchmarks/observations.json`](../benchmarks/ob
 - Python 3.12.12
 - PyTorch 2.14.0a0 ROCm 7.15 development build
 - Triton 3.8.0
-- 512 shape-only workflow
+- 512 shape-only flow measurements
 - 8 sparse-structure steps and 8 shape steps
+- separate 1024 textured acceptance run with 8 texture steps and 2048² maps
 
 ## Instrumented flow execution
 
@@ -61,7 +62,9 @@ More importantly, the INT8 output had 15.5% fewer vertices and 13.5% fewer faces
 
 ## 1024 route acceptance
 
-With the BitPoet checkpoint, the native `pipeline_type=1024` route loaded `structure_model` and the legacy-named `img2shape` 1024 component, completed in 127.13 seconds, and exported a valid 30,466,568-byte GLB with 819,421 vertices and 1,719,392 faces. The 1024 texture-flow path also loaded the `shape2txt` component and completed without a routing error.
+With the BitPoet checkpoint, the native shape-only `pipeline_type=1024` route loaded `structure_model` and the legacy-named `img2shape` 1024 component, completed in 127.13 seconds, and exported a valid 30,466,568-byte GLB with 819,421 vertices and 1,719,392 faces.
+
+The complete textured route additionally loaded `shape2txt`, decoded the PBR voxel attributes, remeshed to 485,188 faces, created a UV atlas, and baked 2048² base-color and metallic-roughness maps with the ROCm-safe PyTorch rasterizer. It completed in 213.95 seconds and exported a 25,616,976-byte GLB containing `TEXCOORD_0`, one material, two textures, and two embedded images. Blender 5.1 imported one mesh, one material, both 2048² images, and two populated image-texture nodes. This is a single acceptance run, not a comparative benchmark.
 
 ## Single-process acceptance evidence
 

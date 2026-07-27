@@ -8,12 +8,12 @@ The promoted topology is deliberately simple:
 ComfyUI :8188
 ├── normal image/Krea/custom nodes
 ├── GLSLShader → Mesa EGL + OpenGL ES 3.2
-└── TRELLIS.2 → Mesa desktop OpenGL + ROCm native extensions
+└── TRELLIS.2 → ROCm native extensions + PyTorch UV texture rasterizer
 ```
 
 There is no second ComfyUI server, proxy node, or private API port.
 
-ComfyUI normally preloads bundled ANGLE EGL/GLES with global symbol visibility when `nodes_glsl.py` imports. TRELLIS's ROCm nvdiffrast plugin needs Mesa desktop OpenGL. The GPL-separated core patch makes that preload conditional on `COMFYUI_DISABLE_ANGLE_PRELOAD`.
+ComfyUI normally preloads bundled ANGLE EGL/GLES with global symbol visibility when `nodes_glsl.py` imports. Some TRELLIS render paths use Mesa desktop OpenGL, while the validated texture-bake route uses a ROCm-safe PyTorch rasterizer. The GPL-separated core patch makes ANGLE preload conditional on `COMFYUI_DISABLE_ANGLE_PRELOAD`.
 
 The launcher sets the variable before Python starts, so PyOpenGL resolves Mesa. On the validated RX 7900 XTX process:
 
@@ -26,7 +26,7 @@ This preserves the `GLSLShader` node and behavior but changes its implementation
 
 ## Native model path
 
-`Trellis2LoadModel_GGUF` selects `INT8 ConvRot` and passes the combined checkpoint to the native TRELLIS model factory. The model manager still acquires DINO, encoder/decoder payloads, and all 512/1024 architecture JSON files on a clean install, but skips BF16 flow payloads replaced by ConvRot. Checkpoint metadata and available prefixes select the correct 512 or 1024 component. The adapter:
+`Trellis2LoadModel_ConvRot` passes the combined checkpoint to the native TRELLIS model factory. The model manager still acquires DINO, encoder/decoder payloads, and all 512/1024 architecture JSON files on a clean install, but skips BF16 flow payloads replaced by ConvRot. Checkpoint metadata and available prefixes select the correct 512 or 1024 component. The adapter:
 
 1. constructs the selected flow model on the meta device;
 2. replaces exactly 210 dense/sparse linear modules with `ConvRotLinear`;
@@ -45,6 +45,8 @@ The ComfyUI core, TRELLIS adapter, and backend patches remain separate files wit
 
 ## Rasterization boundary
 
-`RasterizeCudaContext` is not a fallback on the tested ROCm nvdiffrast port; its implementation is an explicit unsupported stub. TRELLIS code must continue using `RasterizeGLContext`.
+`RasterizeCudaContext` is unavailable on the tested ROCm nvdiffrast port. Creating `RasterizeGLContext` late in a loaded 1024 texture job also caused a native segmentation fault, even though standalone Mesa GL rasterization works.
 
-The completed public validation covers shape generation and export. Although Mesa desktop GL and Mesa GLES coexist in the same process, complete TRELLIS texture generation is not yet promoted as a verified end-to-end route.
+The texture-bake nodes therefore use a bounded triangle-driven PyTorch UV rasterizer on ROCm. It processes faces in chunks, computes pixel-center barycentrics, and returns only covered 3D surface positions. The existing sparse attribute sampler then produces base-color, metallic, roughness, and alpha maps, which are attached as a `PBRMaterial` before GLB export. CUDA builds retain the original nvdiffrast path.
+
+The validated 1024 route generated two 2048² textures and a GLB containing `TEXCOORD_0`, one material, two textures, and two embedded images. Blender 5.1 imported all of them successfully.

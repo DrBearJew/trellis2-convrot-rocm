@@ -9,6 +9,7 @@ This patch kit adds:
 - the published BitPoet checkpoint as a pinned, verified download;
 - one-process Mesa support for TRELLIS and ComfyUI `GLSLShader`;
 - checkpoint-aware 512, 1024, and 1024-cascade routing;
+- ROCm-safe UV rasterization and end-to-end PBR textured GLB export;
 - safe fallback when Triton is unavailable.
 
 Validated on an RX 7900 XTX with Python 3.12, PyTorch 2.14 ROCm 7.15, and Triton 3.8.
@@ -26,7 +27,7 @@ Observed flow execution times:
 
 A complete 512 shape-only run measured **131.67 s with Q4_K_M** and **104.04 s with INT8 ConvRot**: an observed **1.27× wall-clock improvement**.
 
-The enabled BitPoet **1024** route completed in **127.13 s** and exported a valid 30.47 MB GLB with 819,421 vertices and 1,719,392 faces.
+The enabled BitPoet **1024 shape** route completed in **127.13 s** and exported a valid 30.47 MB GLB with 819,421 vertices and 1,719,392 faces. The complete **1024 textured** route completed in **213.95 s** and exported a 25.62 MB GLB containing UVs, one PBR material, and two embedded 2048² textures; Blender 5.1 imported the material and both texture images successfully.
 
 INT8 is optimized for execution speed, not model size. The three-component rebuilt INT8 checkpoint occupies 3.94 GB versus 2.37 GB for the corresponding Q4_K_M files, about 1.66× larger. The two measured runs also produced different mesh topology, so compare visual output for your workload rather than treating polygon count as a quality score.
 
@@ -86,7 +87,12 @@ Use the dedicated **Trellis2 - Load Model (INT8 ConvRot)** node. The BitPoet che
 
 > **Naming note:** `ComfyUI-Trellis2-GGUF` is the upstream extension name. Existing `_GGUF` node IDs remain available only for compatibility, while this patch adds format-neutral aliases and a dedicated ConvRot loader. The ConvRot route loads the `.safetensors` checkpoint above; it does **not** require TRELLIS GGUF flow weights.
 
-For a ready-to-use ComfyUI graph, download and drag [`workflows/trellis2_convrot_bitpoet_1024.workflow.json`](workflows/trellis2_convrot_bitpoet_1024.workflow.json) onto the canvas, choose an input image, and queue it. The graph uses ComfyUI's standard **Load Image** node and explicit INT8 ConvRot titles. A separate [`API payload`](workflows/trellis2_convrot_bitpoet_1024.api.json) is included for automation.
+Two ready-to-use ComfyUI graphs are included:
+
+- [`1024 shape-only`](workflows/trellis2_convrot_bitpoet_1024.workflow.json), with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024.api.json);
+- [`1024 textured PBR`](workflows/trellis2_convrot_bitpoet_1024_textured.workflow.json), with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024_textured.api.json).
+
+Download either workflow, drag it onto the canvas, choose an input image, and queue it. Both use ComfyUI's standard **Load Image** node and clean ConvRot-specific node names.
 
 The first load downloads the normal TRELLIS support assets such as DINO, encoders, decoders, and architecture configs. It does not download duplicate BF16 flow weights.
 
@@ -110,6 +116,7 @@ See [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for the checkpoint format.
 
 - RX 7900 XTX / `gfx1100`
 - 512, 1024, and 1024-cascade TRELLIS routing with the BitPoet checkpoint
+- validated 1024 shape-only and 1024 PBR-textured GLB workflows
 - one ComfyUI process on port 8188
 - Mesa desktop OpenGL for TRELLIS and Mesa GLES for `GLSLShader`
 - prebuilt ROCm TRELLIS extensions matching the active Python/PyTorch ABI

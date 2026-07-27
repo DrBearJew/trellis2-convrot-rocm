@@ -64,6 +64,19 @@
     "pipeline_type": "1024",
     "components": ["structure_model", "img2shape"]
   },
+  "bitpoet_1024_textured_acceptance_run": {
+    "seconds": 213.95,
+    "glb_bytes": 25616976,
+    "vertices": 376882,
+    "faces": 485188,
+    "materials": 1,
+    "textures": 2,
+    "images": 2,
+    "texture_size": 2048,
+    "pipeline_type": "1024",
+    "components": ["structure_model", "img2shape", "shape2txt"],
+    "uv_rasterizer": "bounded triangle-driven PyTorch"
+  },
   "single_process_acceptance_run": {
     "seconds": 122.01,
     "glb_bytes": 28075300,

@@ -21,7 +21,7 @@ def main() -> None:
     sys.path[:0] = [os.fspath(args.trellis_node.resolve()), os.fspath(args.comfyui.resolve())]
     os.environ["TRELLIS2_INT8_FAST_PATH"] = os.fspath(args.int8_backend.resolve())
 
-    from trellis2_gguf.utils import convrot_utils
+    from trellis2_gguf.utils import convrot_utils, uv_rasterizer
 
     layer = convrot_utils.ConvRotLinear(
         4, 3, bias=True, sparse=False, cache_context=False, group_size=4, device="cpu"
@@ -39,6 +39,16 @@ def main() -> None:
     finally:
         convrot_utils._load_triton_backend_modules = original_loader
     assert output.shape == (1, 3) and torch.isfinite(output).all()
+
+    vertices = torch.tensor([
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+    ])
+    faces = torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.int32)
+    mask, positions = uv_rasterizer.rasterize_uv_positions(
+        vertices, faces, vertices[:, :2], 8, face_chunk_size=1
+    )
+    assert mask.all() and positions.shape == (64, 3)
 
     checkpoint = convrot_utils.get_convrot_checkpoint()
     components, contract = convrot_utils._checkpoint_layout(os.path.realpath(checkpoint))
