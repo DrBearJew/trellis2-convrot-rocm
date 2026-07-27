@@ -7,6 +7,7 @@
     {
       "id": 1,
       "type": "Trellis2LoadModel_GGUF",
+      "title": "Load TRELLIS.2 Model — select INT8 ConvRot",
       "pos": [40, 40],
       "size": [320, 190],
       "flags": {},
@@ -21,7 +22,8 @@
     },
     {
       "id": 2,
-      "type": "Trellis2LoadImageWithTransparency_GGUF",
+      "type": "LoadImage",
+      "title": "Choose Input Image",
       "pos": [40, 300],
       "size": [320, 330],
       "flags": {},
@@ -29,16 +31,16 @@
       "mode": 0,
       "inputs": [],
       "outputs": [
-        {"name": "image", "type": "IMAGE", "links": [2]},
-        {"name": "mask", "type": "MASK", "links": null},
-        {"name": "image_with_alpha", "type": "IMAGE", "links": null}
+        {"name": "IMAGE", "type": "IMAGE", "links": [2]},
+        {"name": "MASK", "type": "MASK", "links": null}
       ],
-      "properties": {"Node name for S&R": "Trellis2LoadImageWithTransparency_GGUF"},
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "LoadImage"},
       "widgets_values": ["input.png", "image"]
     },
     {
       "id": 3,
       "type": "Trellis2PreProcessImage_GGUF",
+      "title": "Preprocess Input Image",
       "pos": [440, 330],
       "size": [280, 110],
       "flags": {},
@@ -56,6 +58,7 @@
     {
       "id": 4,
       "type": "Trellis2MeshWithVoxelGenerator_GGUF",
+      "title": "Generate 1024 Mesh — INT8 ConvRot",
       "pos": [800, 90],
       "size": [350, 350],
       "flags": {},
@@ -75,6 +78,7 @@
     {
       "id": 5,
       "type": "Trellis2MeshWithVoxelToTrimesh_GGUF",
+      "title": "Convert to Trimesh",
       "pos": [1230, 110],
       "size": [300, 190],
       "flags": {},
@@ -92,6 +96,7 @@
     {
       "id": 6,
       "type": "Trellis2ExportMesh_GGUF",
+      "title": "Export GLB",
       "pos": [1610, 120],
       "size": [300, 110],
       "flags": {},

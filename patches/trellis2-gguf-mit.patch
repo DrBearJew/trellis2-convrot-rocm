@@ -66,7 +66,7 @@ index d92aa7a..d199c46 100644
          try:
              resolved[key] = resolve_local_path(basename, enable_gguf=use_gguf,
 diff --git a/nodes.py b/nodes.py
-index e1dda3a..7c0b932 100644
+index e1dda3a..9c92e93 100644
 --- a/nodes.py
 +++ b/nodes.py
 @@ -365,6 +365,7 @@ class Trellis2_GGUFLoadModel:
@@ -124,6 +124,33 @@ index e1dda3a..7c0b932 100644
          # Prepare UV coordinates for rasterization (rendering in UV space)
          uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
          rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
+@@ -3952,12 +3966,12 @@ NODE_CLASS_MAPPINGS = {
+     
+ 
+ NODE_DISPLAY_NAME_MAPPINGS = {
+-    "Trellis2LoadModel_GGUF": "Trellis2 - LoadModel (GGUF)",
+-    "Trellis2MeshWithVoxelGenerator_GGUF": "Trellis2 - Mesh With Voxel Generator (GGUF)",
+-    "Trellis2LoadImageWithTransparency_GGUF": "Trellis2 - Load Image with Transparency (GGUF)",
++    "Trellis2LoadModel_GGUF": "Trellis2 - Load Model (GGUF or INT8 ConvRot)",
++    "Trellis2MeshWithVoxelGenerator_GGUF": "Trellis2 - Mesh With Voxel Generator",
++    "Trellis2LoadImageWithTransparency_GGUF": "Trellis2 - Load Image with Transparency",
+     "Trellis2SimplifyMesh_GGUF": "Trellis2 - Simplify Mesh (GGUF)",
+-    "Trellis2MeshWithVoxelToTrimesh_GGUF": "Trellis2 - Mesh With Voxel To Trimesh (GGUF)",
+-    "Trellis2ExportMesh_GGUF": "Trellis2 - Export Mesh (GGUF)",
++    "Trellis2MeshWithVoxelToTrimesh_GGUF": "Trellis2 - Mesh With Voxel To Trimesh",
++    "Trellis2ExportMesh_GGUF": "Trellis2 - Export Mesh",
+     "Trellis2PostProcessMesh_GGUF": "Trellis2 - PostProcess Mesh (using Cumesh) (GGUF)",
+     "Trellis2UnWrapAndRasterizer_GGUF": "Trellis2 - UV Unwrap and Rasterize (GGUF)",
+     "Trellis2MeshWithVoxelAdvancedGenerator_GGUF": "Trellis2 - Mesh With Voxel Advanced Generator (GGUF)",
+@@ -3965,7 +3979,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
+     "Trellis2Remesh_GGUF": "Trellis2 - Remesh (GGUF)",
+     "Trellis2MeshTexturing_GGUF": "Trellis2 - Mesh Texturing (GGUF)",
+     "Trellis2LoadMesh_GGUF": "Trellis2 - Load Mesh (GGUF)",
+-    "Trellis2PreProcessImage_GGUF": "Trellis2 - PreProcess Image (GGUF)",
++    "Trellis2PreProcessImage_GGUF": "Trellis2 - PreProcess Image",
+     "Trellis2MeshRefiner_GGUF": "Trellis2 - Mesh Refiner (GGUF)",
+     "Trellis2PostProcess2_GGUF": "Trellis2 - PostProcess Mesh (using Trimesh) (GGUF)",
+     "Trellis2OvoxelExportToGLB_GGUF": "Trellis2 - Ovoxel Export to GLB (GGUF)",
 diff --git a/trellis2_gguf/models/__init__.py b/trellis2_gguf/models/__init__.py
 index 2a74803..0c9c933 100644
 --- a/trellis2_gguf/models/__init__.py

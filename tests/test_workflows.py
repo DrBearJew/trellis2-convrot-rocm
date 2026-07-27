@@ -18,6 +18,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(len(nodes), 6)
         self.assertEqual(len(workflow["links"]), 5)
         self.assertEqual(nodes[1]["widgets_values"][1], "INT8 ConvRot")
+        self.assertEqual(nodes[2]["type"], "LoadImage")
+        self.assertTrue(all("GGUF" not in node.get("title", "") for node in nodes.values()))
         self.assertEqual(nodes[4]["widgets_values"], [
             271828, "fixed", "1024", 8, 8, 8, 49152, 32, 1,
             False, False, "euler",
@@ -34,6 +36,7 @@ class WorkflowTest(unittest.TestCase):
             (WORKFLOWS / "trellis2_convrot_bitpoet_1024.api.json").read_text()
         )
         self.assertEqual(payload["1"]["inputs"]["model_format"], "INT8 ConvRot")
+        self.assertEqual(payload["2"]["class_type"], "LoadImage")
         self.assertEqual(payload["4"]["inputs"]["pipeline_type"], "1024")
         self.assertFalse(payload["4"]["inputs"]["generate_texture_slat"])
         self.assertEqual(payload["6"]["inputs"]["file_format"], "glb")

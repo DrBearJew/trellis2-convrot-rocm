@@ -11,7 +11,7 @@
     }
   },
   "2": {
-    "class_type": "Trellis2LoadImageWithTransparency_GGUF",
+    "class_type": "LoadImage",
     "inputs": {
       "image": "input.png"
     }
