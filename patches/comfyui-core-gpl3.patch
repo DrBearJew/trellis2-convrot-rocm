@@ -1,0 +1,17 @@
+diff --git a/comfy_extras/nodes_glsl.py b/comfy_extras/nodes_glsl.py
+index c7161973..428e3294 100644
+--- a/comfy_extras/nodes_glsl.py
++++ b/comfy_extras/nodes_glsl.py
+@@ -32,7 +32,11 @@ def _preload_angle():
+ 
+ # Pre-load ANGLE *before* any PyOpenGL import so that the EGL platform
+ # plugin picks up ANGLE's libEGL / libGLESv2 instead of system libs.
+-_preload_angle()
++# TRELLIS.2's ROCm nvdiffrast path needs Mesa desktop OpenGL. In native
++# single-process mode, keep Mesa EGL authoritative; GLSLShader then uses
++# Mesa's OpenGL ES implementation instead of ANGLE.
++if os.environ.get("COMFYUI_DISABLE_ANGLE_PRELOAD") != "1":
++    _preload_angle()
+ os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+ 
+ 

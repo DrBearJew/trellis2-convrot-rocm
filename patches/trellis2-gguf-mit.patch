@@ -1,0 +1,1073 @@
+diff --git a/model_manager.py b/model_manager.py
+index d92aa7a..3316141 100644
+--- a/model_manager.py
++++ b/model_manager.py
+@@ -227,6 +227,7 @@ def ensure_model_files(
+ 
+     enable_gguf = model_format.startswith("GGUF")
+     enable_sdnq = model_format.startswith("sdnq")
++    enable_convrot = model_format == "INT8 ConvRot"
+     
+     gguf_quant = model_format.split(" ")[1] if enable_gguf else "Q8_0"
+     precision = None
+@@ -268,6 +269,22 @@ def ensure_model_files(
+ 
+     print(f"[ModelManager] Verifying {len(all_models)} model components ({model_format})...")
+ 
++    requested_resolution = os.environ.get("TRELLIS2_MODEL_RESOLUTION", "").strip()
++    if enable_convrot:
++        if requested_resolution not in {"", "512"}:
++            raise ValueError("INT8 ConvRot currently supports TRELLIS2_MODEL_RESOLUTION=512 only")
++        requested_resolution = "512"
++    if requested_resolution in {"512", "1024"}:
++        unused_resolution = "1024" if requested_resolution == "512" else "512"
++        all_models = {
++            key: rel_path for key, rel_path in all_models.items()
++            if not key.endswith(f"_{unused_resolution}")
++        }
++        print(
++            f"[ModelManager] Restricting flow-model acquisition to {requested_resolution}px "
++            f"({len(all_models)} components)."
++        )
++
+     resolved = {}
+     for key, rel_path in all_models.items():
+         basename = rel_path.split("/")[-1]
+@@ -312,7 +329,13 @@ def ensure_model_files(
+ 
+         # ── Regular GGUF / Safetensors Download Logic ─────────────────────
+         # Determine suffixes to fetch
+-        if enc_dec:
++        if enable_convrot and not enc_dec:
++            # ConvRot replaces only the three flow weights. Their architecture
++            # JSON files are still required to construct the native modules.
++            suffixes = [".json"]
++            use_gguf = False
++            prec = None
++        elif enc_dec:
+             # enc/dec: always plain safetensors (fp16 in name already)
+             suffixes = [".json", ".safetensors"]
+             use_gguf = False
+@@ -344,6 +367,18 @@ def ensure_model_files(
+             except Exception as e:
+                 print(f"[ModelManager] ⚠ Failed to download {hf_filename}: {e}")
+ 
++        # ConvRot flow weights live in the combined checkpoint, but the
++        # matching architecture config must have been acquired above.
++        if enable_convrot and not enc_dec:
++            config_path = next(
++                (path for path in _candidate_paths(basename, ".json") if os.path.exists(path)),
++                None,
++            )
++            if config_path is None:
++                raise FileNotFoundError(f"ConvRot architecture config is missing for {basename}")
++            resolved[key] = (config_path, None, False)
++            continue
++
+         # Record resolved paths for caller
+         try:
+             resolved[key] = resolve_local_path(basename, enable_gguf=use_gguf,
+diff --git a/nodes.py b/nodes.py
+index e1dda3a..ff370de 100644
+--- a/nodes.py
++++ b/nodes.py
+@@ -365,6 +365,7 @@ class Trellis2_GGUFLoadModel:
+             "required": {
+                 "modelname": (["TRELLIS.2-4B", "Pixal3D-GGUF"],),
+                 "model_format": ([
++                    "INT8 ConvRot",
+                     "GGUF BF16",
+                     "GGUF Q8_0", 
+                     "GGUF Q6_K", 
+@@ -424,7 +425,18 @@ class Trellis2_GGUFLoadModel:
+         with open(pipeline_json_local, 'r') as f:
+             pipeline_config = json.load(f)
+ 
+-        # This is the ONLY place that downloads model files
++        # ConvRot uses one already-downloaded combined three-flow checkpoint.
++        # The model manager still acquires DINO, decoders, encoders, and the
++        # three architecture JSON files, while skipping replaced flow weights.
++        enable_convrot = model_format == "INT8 ConvRot"
++        convrot_checkpoint = None
++        if enable_convrot:
++            if modelname != "TRELLIS.2-4B":
++                raise ValueError("INT8 ConvRot is available only for TRELLIS.2-4B")
++            from .trellis2_gguf.utils.convrot_utils import get_convrot_checkpoint
++            convrot_checkpoint = get_convrot_checkpoint()
++            if not os.path.isfile(convrot_checkpoint):
++                raise FileNotFoundError(convrot_checkpoint)
+         model_manager.ensure_model_files(model_format, pipeline_config, gguf_repo=repo_id)
+ 
+         # ── Parse format for pipeline construction ────────────────────────
+@@ -462,6 +474,8 @@ class Trellis2_GGUFLoadModel:
+             sdnq_use_quantized_matmul=sdnq_use_quantized_matmul,
+             sdnq_torch_compile=sdnq_torch_compile,
+             sdnq_svd_rank=sdnq_svd_rank,
++            enable_convrot=enable_convrot,
++            convrot_checkpoint=convrot_checkpoint,
+             isPixal3D=isPixal3D,
+         )
+ 
+@@ -1256,7 +1270,7 @@ class Trellis2_GGUFUnWrapAndRasterizer:
+ 
+         print("Sampling attributes...")
+         # Setup differentiable rasterizer context
+-        ctx = dr.RasterizeCudaContext()
++        ctx = dr.RasterizeGLContext()
+         # Prepare UV coordinates for rasterization (rendering in UV space)
+         uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
+         rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
+@@ -1984,7 +1998,7 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+ 
+         print("Sampling attributes...")
+         # Setup differentiable rasterizer context
+-        ctx = dr.RasterizeCudaContext()
++        ctx = dr.RasterizeGLContext()
+         # Prepare UV coordinates for rasterization (rendering in UV space)
+         uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
+         rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
+diff --git a/trellis2_gguf/models/__init__.py b/trellis2_gguf/models/__init__.py
+index 2a74803..0f7f323 100644
+--- a/trellis2_gguf/models/__init__.py
++++ b/trellis2_gguf/models/__init__.py
+@@ -151,6 +151,7 @@ def __getattr__(name):
+ def from_pretrained(path: str, enable_gguf: bool = False, gguf_quant: str = "Q8_0",
+                     enable_sdnq: bool = False, sdnq_use_quantized_matmul: bool = True,
+                     sdnq_torch_compile: bool = False,
++                    enable_convrot: bool = False, convrot_checkpoint: str | None = None,
+                     **kwargs):
+     """
+     Load a model from a pretrained checkpoint.
+@@ -194,7 +195,27 @@ def from_pretrained(path: str, enable_gguf: bool = False, gguf_quant: str = "Q8_
+         
+     basename = os.path.basename(path)
+ 
+-    logger.debug("Loading %s  sdnq=%s  gguf=%s", basename, enable_sdnq, enable_gguf)
++    logger.debug("Loading %s  sdnq=%s  gguf=%s  convrot=%s", basename, enable_sdnq, enable_gguf, enable_convrot)
++
++    if enable_convrot:
++        if enable_gguf or enable_sdnq:
++            raise ValueError("ConvRot, GGUF, and SDNQ model modes are mutually exclusive")
++        from ..utils.convrot_utils import (
++            checkpoint_prefix_for_path,
++            find_model_config,
++            get_convrot_checkpoint,
++            load_convrot_model,
++        )
++        config_file = find_model_config(path)
++        with open(config_file, "r") as handle:
++            config = json.load(handle)
++        model_class = __getattr__(config["name"])
++        return load_convrot_model(
++            model_class=model_class,
++            config=config,
++            checkpoint=convrot_checkpoint or get_convrot_checkpoint(),
++            component_prefix=checkpoint_prefix_for_path(path),
++        )
+ 
+     # ------------------------------------------------------------------ #
+     # SDNQ loading: flat layout  sdnq/{name}_quantization_config.json
+diff --git a/trellis2_gguf/models/sparse_structure_flow.py b/trellis2_gguf/models/sparse_structure_flow.py
+index c2a02ab..4b02555 100644
+--- a/trellis2_gguf/models/sparse_structure_flow.py
++++ b/trellis2_gguf/models/sparse_structure_flow.py
+@@ -4,7 +4,7 @@ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
+ import numpy as np
+-from ..modules.utils import convert_module_to, manual_cast, str_to_dtype, convert_module_to_f16
++from ..modules.utils import convert_module_to, manual_cast, manual_cast_condition, str_to_dtype, convert_module_to_f16
+ from ..modules.transformer import AbsolutePositionEmbedder, ModulatedTransformerCrossBlock, ModulatedTransformerCrossBlock_woT
+ from ..modules.attention import RotaryPositionEmbedder
+ 
+@@ -256,6 +256,7 @@ class SparseStructureFlowModel(nn.Module):
+                 f"Input shape mismatch, got {x.shape}, expected {[x.shape[0], self.in_channels, *[self.resolution] * 3]}"
+ 
+         h = x.view(*x.shape[:2], -1).permute(0, 2, 1).contiguous()
++        h = manual_cast(h, self.dtype)
+ 
+         h = self.input_layer(h)
+         if self.pe_mode == "ape":
+@@ -277,24 +278,24 @@ class SparseStructureFlowModel(nn.Module):
+                 else:
+                     global_cond = cond
+                     proj_cond = None
+-                global_cond = manual_cast(global_cond, self.dtype)
+-                proj_cond = manual_cast(proj_cond, self.dtype) if proj_cond is not None else None
++                global_cond = manual_cast_condition(self, 'global', global_cond, self.dtype)
++                proj_cond = manual_cast_condition(self, 'proj', proj_cond, self.dtype) if proj_cond is not None else None
+                 cond = (global_cond, proj_cond)
+             elif self.image_attn_mode == 'gated_proj':
+-                global_cond = manual_cast(cond['global'], self.dtype)
+-                proj_semantic = manual_cast(cond['proj_semantic'], self.dtype)
+-                proj_color = manual_cast(cond['proj_color'], self.dtype)
++                global_cond = manual_cast_condition(self, 'global', cond['global'], self.dtype)
++                proj_semantic = manual_cast_condition(self, 'proj_semantic', cond['proj_semantic'], self.dtype)
++                proj_color = manual_cast_condition(self, 'proj_color', cond['proj_color'], self.dtype)
+                 cond = {'global': global_cond, 'proj_semantic': proj_semantic, 'proj_color': proj_color}
+             else:
+-                cond = manual_cast(cond, self.dtype)        
++                cond = manual_cast_condition(self, 'cross', cond, self.dtype)
+         else:
+-            cond = manual_cast(cond, self.dtype)
++            cond = manual_cast_condition(self, 'cross', cond, self.dtype)
+             
+         for block in self.blocks:
+             h = block(h, t_emb, cond, self.rope_phases)
+-        h = manual_cast(h, x.dtype)
+         h = F.layer_norm(h, h.shape[-1:])
+         h = self.out_layer(h)
++        h = manual_cast(h, x.dtype)
+ 
+         h = h.permute(0, 2, 1).view(h.shape[0], h.shape[2], *[self.resolution] * 3).contiguous()
+ 
+diff --git a/trellis2_gguf/models/structured_latent_flow.py b/trellis2_gguf/models/structured_latent_flow.py
+index bf33868..e300fc8 100644
+--- a/trellis2_gguf/models/structured_latent_flow.py
++++ b/trellis2_gguf/models/structured_latent_flow.py
+@@ -4,7 +4,7 @@ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
+ import numpy as np
+-from ..modules.utils import convert_module_to, manual_cast, str_to_dtype
++from ..modules.utils import convert_module_to, manual_cast, manual_cast_condition, str_to_dtype
+ from ..modules.transformer import AbsolutePositionEmbedder
+ from ..modules import sparse as sp
+ from ..modules.sparse.transformer import ModulatedSparseTransformerCrossBlock
+@@ -214,7 +214,7 @@ class SLatFlowModel(nn.Module):
+         if concat_cond is not None:
+             x = sp.sparse_cat([x, concat_cond], dim=-1)
+ 
+-        h = self.input_layer(x)
++        h = self.input_layer(manual_cast(x, self.dtype))
+         h = manual_cast(h, self.dtype)
+         t_emb = self.t_embedder(t)
+         if self.share_mod:
+@@ -234,29 +234,28 @@ class SLatFlowModel(nn.Module):
+                 global_cond, proj_cond = cond
+             if isinstance(global_cond, list):
+                 global_cond = sp.VarLenTensor.from_tensor_list(global_cond)
+-            global_cond = manual_cast(global_cond, self.dtype)
+-            proj_cond = manual_cast(proj_cond, self.dtype)
++            global_cond = manual_cast_condition(self, 'global', global_cond, self.dtype)
++            proj_cond = manual_cast_condition(self, 'proj', proj_cond, self.dtype)
+             cond = (global_cond, proj_cond)
+         elif self.image_attn_mode == 'gated_proj':
+             global_cond = cond['global']
+             if isinstance(global_cond, list):
+                 global_cond = sp.VarLenTensor.from_tensor_list(global_cond)
+-            global_cond = manual_cast(global_cond, self.dtype)
+-            proj_semantic = manual_cast(cond['proj_semantic'], self.dtype)
+-            proj_color = manual_cast(cond['proj_color'], self.dtype)
++            global_cond = manual_cast_condition(self, 'global', global_cond, self.dtype)
++            proj_semantic = manual_cast_condition(self, 'proj_semantic', cond['proj_semantic'], self.dtype)
++            proj_color = manual_cast_condition(self, 'proj_color', cond['proj_color'], self.dtype)
+             cond = {'global': global_cond, 'proj_semantic': proj_semantic, 'proj_color': proj_color}
+         else:
+             if isinstance(cond, list):
+                 cond = sp.VarLenTensor.from_tensor_list(cond)
+-            cond = manual_cast(cond, self.dtype)
++            cond = manual_cast_condition(self, 'cross', cond, self.dtype)
+ 
+         for block in self.blocks:
+             h = block(h, t_emb, cond)
+ 
+-        h = manual_cast(h, x.dtype)
+         h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
+         h = self.out_layer(h)
+-        return h
++        return manual_cast(h, x.dtype)
+ 
+ 
+ class ElasticSLatFlowModel(SparseTransformerElasticMixin, SLatFlowModel):
+diff --git a/trellis2_gguf/modules/image_feature_extractor.py b/trellis2_gguf/modules/image_feature_extractor.py
+index b676330..cfd2ac3 100644
+--- a/trellis2_gguf/modules/image_feature_extractor.py
++++ b/trellis2_gguf/modules/image_feature_extractor.py
+@@ -1,8 +1,10 @@
+ from typing import *
++import os
++
+ import torch
+ import torch.nn.functional as F
+ from torchvision import transforms
+-from transformers import DINOv3ViTModel
++from transformers import DINOv3ViTConfig, DINOv3ViTModel
+ import numpy as np
+ from PIL import Image
+ 
+@@ -62,7 +64,33 @@ class DinoV3FeatureExtractor:
+     """
+     def __init__(self, model_name: str, image_size=2048):
+         self.model_name = model_name
+-        self.model = DINOv3ViTModel.from_pretrained(model_name)
++        weights_file = os.path.join(model_name, "model.safetensors")
++        if os.path.isfile(weights_file):
++            # NTFS/FUSE mmap faults cost about one second per tensor on this ROCm
++            # host. One owned sequential read keeps subsequent GPU transfer fast.
++            from ..utils.convrot_utils import load_owned_safetensors
++
++            config = DINOv3ViTConfig.from_pretrained(model_name)
++            with torch.device("meta"):
++                self.model = DINOv3ViTModel(config)
++            state = load_owned_safetensors(weights_file)
++            state = {
++                (f"model.{key}" if key.startswith("layer.") else key): value
++                for key, value in state.items()
++            }
++            self.model.load_state_dict(state, strict=True, assign=True)
++            rope = self.model.rope_embeddings
++            rope.inv_freq = 1 / rope.base ** torch.arange(
++                0, 1, 4 / rope.head_dim, dtype=torch.float32
++            )
++            meta = [
++                name for name, tensor in list(self.model.named_parameters()) + list(self.model.named_buffers())
++                if tensor.is_meta
++            ]
++            if meta:
++                raise ValueError(f"DINOv3 bulk loader retained meta tensors: {meta}")
++        else:
++            self.model = DINOv3ViTModel.from_pretrained(model_name)
+         self.model.eval()
+         self.image_size = image_size
+         self.transform = transforms.Compose([
+diff --git a/trellis2_gguf/modules/utils.py b/trellis2_gguf/modules/utils.py
+index f60f052..0458932 100644
+--- a/trellis2_gguf/modules/utils.py
++++ b/trellis2_gguf/modules/utils.py
+@@ -1,3 +1,5 @@
++import weakref
++
+ import torch
+ import torch.nn as nn
+ from ..modules import sparse as sp
+@@ -84,6 +86,45 @@ def manual_cast(tensor, dtype):
+     return tensor
+ 
+ 
++def manual_cast_condition(owner: nn.Module, key: str, tensor, dtype):
++    """Cache immutable conditioning casts for ConvRot models across diffusion steps."""
++    if (
++        not getattr(owner, "_cache_condition_casts", False)
++        or not isinstance(tensor, torch.Tensor)
++        or torch.is_autocast_enabled()
++        or tensor.dtype == dtype
++    ):
++        return manual_cast(tensor, dtype)
++
++    try:
++        version = int(tensor._version)
++    except RuntimeError:
++        version = None  # Inference tensors are immutable by contract.
++    cache = getattr(owner, "_condition_cast_cache", None)
++    if cache is None:
++        cache = {}
++        owner._condition_cast_cache = cache
++    cache_key = (key, str(tensor.device), dtype)
++    entry = cache.get(cache_key)
++    if entry is not None and entry[0]() is tensor and entry[1] == version:
++        return entry[2]
++
++    converted = tensor.to(dtype=dtype)
++
++    def remove_entry(source_ref, owner_ref=weakref.ref(owner), item_key=cache_key):
++        live_owner = owner_ref()
++        if live_owner is None:
++            return
++        live_cache = getattr(live_owner, "_condition_cast_cache", None)
++        current = live_cache.get(item_key) if live_cache is not None else None
++        if current is not None and current[0] is source_ref:
++            live_cache.pop(item_key, None)
++
++    source_ref = weakref.ref(tensor, remove_entry)
++    cache[cache_key] = (source_ref, version, converted)
++    return converted
++
++
+ def str_to_dtype(dtype_str: str):
+     return {
+         'f16': torch.float16,
+diff --git a/trellis2_gguf/pipelines/trellis2_image_to_3d.py b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
+index f3eb7dd..beffddd 100644
+--- a/trellis2_gguf/pipelines/trellis2_image_to_3d.py
++++ b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
+@@ -285,6 +285,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                         enable_sdnq: bool = False, sdnq_use_quantized_matmul: bool = True,
+                         sdnq_torch_compile: bool = False,
+                         sdnq_svd_rank: int = 32,
++                        enable_convrot: bool = False, convrot_checkpoint: str = None,
+                         isPixal3D: bool = False) -> "Trellis2ImageTo3DPipeline":
+         """
+         Load a pretrained model.
+@@ -332,6 +333,10 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         pipeline.sdnq_use_quantized_matmul = sdnq_use_quantized_matmul
+         pipeline.sdnq_torch_compile = sdnq_torch_compile
+         pipeline.sdnq_svd_rank = sdnq_svd_rank
++        pipeline.enable_convrot = enable_convrot
++        pipeline.convrot_checkpoint = convrot_checkpoint
++        if enable_convrot:
++            pipeline.default_pipeline_type = '512'
+         pipeline.isPixal3D = isPixal3D
+ 
+         pipeline._pretrained_args['models']['sparse_structure_decoder'] = os.path.join(folder_paths.models_dir,"Trellis2","decoders","Stage1","ss_dec_conv3d_16l8_fp16")
+@@ -720,6 +725,13 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+             self.pixal3d_image_cond_tex_1024 = None
+             self._cleanup_cuda()
+ 
++    def _require_convrot_512(self, resolution_or_pipeline_type) -> None:
++        if getattr(self, 'enable_convrot', False) and str(resolution_or_pipeline_type) != '512':
++            raise ValueError(
++                "INT8 ConvRot is currently gated to 512: the combined checkpoint "
++                "has no resolution tag for its single texture component"
++            )
++
+     def load_sparse_structure_model(self):        
+         if self.models['sparse_structure_flow_model'] is None:
+             print('Loading Sparse Structure model ...')
+@@ -732,6 +744,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 enable_sdnq=getattr(self, 'enable_sdnq', False),
+                 sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
+                 sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
++                enable_convrot=getattr(self, 'enable_convrot', False),
++                convrot_checkpoint=getattr(self, 'convrot_checkpoint', None),
+                 isPixal3D=getattr(self, 'isPixal3D', False),
+             )
+             self.models['sparse_structure_flow_model'].eval()
+@@ -779,6 +793,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 enable_sdnq=getattr(self, 'enable_sdnq', False),
+                 sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
+                 sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
++                enable_convrot=getattr(self, 'enable_convrot', False),
++                convrot_checkpoint=getattr(self, 'convrot_checkpoint', None),
+                 isPixal3D=getattr(self, 'isPixal3D', False),
+             )
+             self.models['shape_slat_flow_model_512'].eval()
+@@ -804,6 +820,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 enable_sdnq=getattr(self, 'enable_sdnq', False),
+                 sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
+                 sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
++                enable_convrot=getattr(self, 'enable_convrot', False),
++                convrot_checkpoint=getattr(self, 'convrot_checkpoint', None),
+                 isPixal3D=getattr(self, 'isPixal3D', False),
+             )
+             self.models['tex_slat_flow_model_512'].eval()
+@@ -853,7 +871,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+             self.models['shape_slat_decoder'] = None
+             self._cleanup_cuda()
+ 
+-    def load_shape_slat_flow_model_1024(self):        
++    def load_shape_slat_flow_model_1024(self):
++        self._require_convrot_512(1024)
+         if self.models['shape_slat_flow_model_1024'] is None:
+             print('Loading Shape Slat Flow 1024 model ...')
+             _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['shape_slat_flow_model_1024']))
+@@ -865,6 +884,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 enable_sdnq=getattr(self, 'enable_sdnq', False),
+                 sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
+                 sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
++                enable_convrot=getattr(self, 'enable_convrot', False),
++                convrot_checkpoint=getattr(self, 'convrot_checkpoint', None),
+                 isPixal3D=getattr(self, 'isPixal3D', False),
+             )
+             self.models['shape_slat_flow_model_1024'].eval()
+@@ -876,7 +897,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+             self.models['shape_slat_flow_model_1024'] = None
+             self._cleanup_cuda()
+ 
+-    def load_tex_slat_flow_model_1024(self):        
++    def load_tex_slat_flow_model_1024(self):
++        self._require_convrot_512(1024)
+         if self.models['tex_slat_flow_model_1024'] is None:
+             print('Loading Texture Slat Flow 1024 model ...')
+             _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['tex_slat_flow_model_1024']))
+@@ -888,6 +910,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 enable_sdnq=getattr(self, 'enable_sdnq', False),
+                 sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
+                 sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
++                enable_convrot=getattr(self, 'enable_convrot', False),
++                convrot_checkpoint=getattr(self, 'convrot_checkpoint', None),
+                 isPixal3D=getattr(self, 'isPixal3D', False),
+             )
+             self.models['tex_slat_flow_model_1024'].eval()
+@@ -1611,6 +1635,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         """
+         # Check pipeline type
+         pipeline_type = pipeline_type or self.default_pipeline_type
++        self._require_convrot_512(pipeline_type)
+         # if pipeline_type == '512':
+             # assert 'shape_slat_flow_model_512' in self.models, "No 512 resolution shape SLat flow model found."
+             # assert 'tex_slat_flow_model_512' in self.models, "No 512 resolution texture SLat flow model found."
+@@ -1975,6 +2000,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         """
+         if pipeline_type is None:
+             pipeline_type = self.default_pipeline_type
++        self._require_convrot_512(pipeline_type)
+         
+         seed_all(seed)
+         
+@@ -2752,6 +2778,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         tex_sampler = 'euler',
+         max_views: int = 4
+     ) -> List[MeshWithVoxel]:
++        self._require_convrot_512(pipeline_type)
+         
+         if isinstance(image, (list, tuple)):
+             images = list(image)
+@@ -3172,7 +3199,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+                 
+         # rasterize
+         print('Finalizing mesh ...')
+-        ctx = dr.RasterizeCudaContext()
++        ctx = dr.RasterizeGLContext()
+         uvs_torch = torch.cat([uvs_torch * 2 - 1, torch.zeros_like(uvs_torch[:, :1]), torch.ones_like(uvs_torch[:, :1])], dim=-1).unsqueeze(0)
+         rast, _ = dr.rasterize(
+             ctx, uvs_torch, faces_torch,
+@@ -3280,6 +3307,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         dino_foundation_cap: float = 0.92,
+         **kwargs,
+     ):
++        self._require_convrot_512(resolution)
+         
+         self.use_tiled_decoder_for_texture = use_tiled_decoder
+         self.tiled_decoder_size = decoder_tile_size
+@@ -3379,6 +3407,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         dino_foundation_cap: float = 0.92,
+         **kwargs,
+     ):
++        self._require_convrot_512(resolution)
+         
+         self.use_tiled_decoder_for_texture = use_tiled_decoder
+         self.tiled_decoder_size = decoder_tile_size
+@@ -3625,6 +3654,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         dino_foundation_cap: float = 0.92,
+         **kwargs,
+     ):
++        self._require_convrot_512(resolution)
+         self.use_tiled_decoder_for_texture = use_tiled_decoder
+         self.tiled_decoder_size = decoder_tile_size
+         self.tiled_decoder_overlap = decoder_overlap
+diff --git a/trellis2_gguf/pipelines/trellis2_texturing.py b/trellis2_gguf/pipelines/trellis2_texturing.py
+index 848c3db..28ed327 100644
+--- a/trellis2_gguf/pipelines/trellis2_texturing.py
++++ b/trellis2_gguf/pipelines/trellis2_texturing.py
+@@ -363,7 +363,7 @@ class Trellis2TexturingPipeline(Pipeline):
+             normals = normals[vmap.cpu().numpy()]
+                 
+         # rasterize
+-        ctx = dr.RasterizeCudaContext()
++        ctx = dr.RasterizeGLContext()
+         uvs_torch = torch.cat([uvs_torch * 2 - 1, torch.zeros_like(uvs_torch[:, :1]), torch.ones_like(uvs_torch[:, :1])], dim=-1).unsqueeze(0)
+         rast, _ = dr.rasterize(
+             ctx, uvs_torch, faces_torch,
+diff --git a/trellis2_gguf/renderers/mesh_renderer.py b/trellis2_gguf/renderers/mesh_renderer.py
+index e20efc5..8164e94 100644
+--- a/trellis2_gguf/renderers/mesh_renderer.py
++++ b/trellis2_gguf/renderers/mesh_renderer.py
+@@ -54,7 +54,7 @@ class MeshRenderer:
+             "clamp_barycentric_coords": False,
+         })
+         self.rendering_options.update(rendering_options)
+-        self.glctx = dr.RasterizeCudaContext(device=device)
++        self.glctx = dr.RasterizeGLContext(device=device)
+         self.device=device
+         
+     def render(
+diff --git a/trellis2_gguf/renderers/pbr_mesh_renderer.py b/trellis2_gguf/renderers/pbr_mesh_renderer.py
+index b3b4655..7f737fb 100644
+--- a/trellis2_gguf/renderers/pbr_mesh_renderer.py
++++ b/trellis2_gguf/renderers/pbr_mesh_renderer.py
+@@ -206,7 +206,7 @@ class PbrMeshRenderer:
+             "peel_layers": 8,
+         })
+         self.rendering_options.update(rendering_options)
+-        self.glctx = dr.RasterizeCudaContext(device=device)
++        self.glctx = dr.RasterizeGLContext(device=device)
+         self.device=device
+         
+     def render(
+diff --git a/trellis2_gguf/utils/convrot_utils.py b/trellis2_gguf/utils/convrot_utils.py
+new file mode 100644
+index 0000000..4214e21
+--- /dev/null
++++ b/trellis2_gguf/utils/convrot_utils.py
+@@ -0,0 +1,451 @@
++"""TRELLIS-native loader and linear adapters for combined ConvRot W8A8 checkpoints."""
++
++from __future__ import annotations
++
++import importlib
++import json
++import logging
++import os
++from pathlib import Path
++import struct
++import sys
++import types
++from typing import Any
++
++import torch
++from torch import Tensor, nn
++import torch.nn.functional as F
++logger = logging.getLogger(__name__)
++
++_BACKEND_PACKAGE = "_trellis2_int8_fast_rocm"
++_PREFIX_BY_BASENAME = {
++    "ss_flow_img_dit_1_3B_64_bf16": "structure_model",
++    "slat_flow_img2shape_dit_1_3B_512_bf16": "img2shape_512",
++    "slat_flow_imgshape2tex_dit_1_3B_512_bf16": "shape2txt",
++}
++
++
++def get_convrot_checkpoint() -> str:
++    configured = os.environ.get("TRELLIS2_CONVROT_CHECKPOINT")
++    if configured:
++        return configured
++    import folder_paths
++    return os.path.join(
++        folder_paths.models_dir,
++        "diffusion_models",
++        "trellis_2_int8_convrot.safetensors",
++    )
++
++
++def checkpoint_prefix_for_path(path: str) -> str:
++    basename = os.path.basename(path.rstrip("/\\"))
++    try:
++        return _PREFIX_BY_BASENAME[basename]
++    except KeyError as exc:
++        raise ValueError(f"No ConvRot checkpoint prefix is defined for {basename!r}") from exc
++
++
++def find_model_config(path: str) -> str:
++    """Find the non-SDNQ architecture JSON corresponding to a pipeline model path."""
++    candidate = Path(path + ".json")
++    if candidate.is_file():
++        return str(candidate)
++    basename = os.path.basename(path.rstrip("/\\")) + ".json"
++    model_root = Path(path).parent.parent
++    matches = [
++        item for item in model_root.rglob(basename)
++        if "sdnq" not in {part.lower() for part in item.parts}
++    ]
++    if len(matches) != 1:
++        raise FileNotFoundError(
++            f"Expected one architecture config named {basename} below {model_root}, found {matches}"
++        )
++    return str(matches[0])
++
++
++def _find_backend_root() -> Path:
++    configured = os.environ.get("TRELLIS2_INT8_FAST_PATH")
++    candidates = []
++    if configured:
++        candidates.append(Path(configured))
++    custom_nodes = Path(__file__).resolve().parents[3]
++    candidates.append(custom_nodes / "ComfyUI-INT8-Fast-ROCM")
++    candidates.append(custom_nodes.parent.parent / "sources" / "ComfyUI-INT8-Fast-ROCM")
++    for candidate in candidates:
++        if (candidate / "int8_fused_kernel.py").is_file() and (candidate / "convrot.py").is_file():
++            return candidate.resolve()
++    raise FileNotFoundError(
++        "ComfyUI-INT8-Fast-ROCM was not found; set TRELLIS2_INT8_FAST_PATH to its source directory"
++    )
++
++
++def _ensure_backend_package() -> None:
++    if _BACKEND_PACKAGE not in sys.modules:
++        package = types.ModuleType(_BACKEND_PACKAGE)
++        package.__path__ = [str(_find_backend_root())]
++        package.__package__ = _BACKEND_PACKAGE
++        sys.modules[_BACKEND_PACKAGE] = package
++
++
++def _load_rotation_module():
++    _ensure_backend_package()
++    return importlib.import_module(f"{_BACKEND_PACKAGE}.convrot")
++
++
++def _load_triton_backend_modules():
++    """Load optional Triton acceleration without hiding unrelated import defects."""
++    _ensure_backend_package()
++    try:
++        kernel = importlib.import_module(f"{_BACKEND_PACKAGE}.int8_fused_kernel")
++        cache = importlib.import_module(f"{_BACKEND_PACKAGE}.convrot_cache")
++    except ModuleNotFoundError as exc:
++        if exc.name != "triton" and not str(exc.name).startswith("triton."):
++            raise
++        return None, None
++    return kernel, cache
++
++
++class ConvRotLinear(nn.Module):
++    """Linear layer backed by pre-rotated INT8 weights and per-output-row scales."""
++
++    def __init__(
++        self,
++        in_features: int,
++        out_features: int,
++        *,
++        bias: bool,
++        sparse: bool,
++        cache_context: bool,
++        group_size: int = 256,
++        device: str | torch.device = "meta",
++    ) -> None:
++        super().__init__()
++        self.in_features = int(in_features)
++        self.out_features = int(out_features)
++        self.sparse = bool(sparse)
++        self.cache_context = bool(cache_context)
++        self.group_size = int(group_size)
++        if self.in_features % self.group_size:
++            raise ValueError(
++                f"ConvRot in_features {self.in_features} is not divisible by group size {self.group_size}"
++            )
++        self.weight = nn.Parameter(
++            torch.empty((self.out_features, self.in_features), dtype=torch.int8, device=device),
++            requires_grad=False,
++        )
++        self.register_buffer(
++            "weight_scale",
++            torch.empty((self.out_features, 1), dtype=torch.float32, device=device),
++        )
++        self.bias = (
++            nn.Parameter(torch.empty(self.out_features, dtype=torch.bfloat16, device=device), requires_grad=False)
++            if bias
++            else None
++        )
++
++    def _forward_tensor(self, source: Tensor) -> Tensor:
++        convrot = _load_rotation_module()
++        kernel, cache = _load_triton_backend_modules()
++        original_shape = source.shape
++        compute_dtype = source.dtype if source.dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
++
++        if kernel is not None and source.device.type == "cuda" and self.cache_context:
++            x_int8, x_scale = cache.prepare_convrot_activation_cached(
++                source, compute_dtype, self.group_size
++            )
++            output = kernel.triton_int8_linear_per_row_prequantized(
++                x_int8,
++                x_scale,
++                self.weight,
++                self.weight_scale,
++                self.bias,
++                compute_dtype,
++                trellis_static=True,
++            )
++        else:
++            x_2d = source.reshape(-1, original_shape[-1]).to(compute_dtype)
++            hadamard = convrot.build_hadamard(
++                self.group_size, device=source.device, dtype=compute_dtype
++            )
++            rotated = convrot.rotate_activation(x_2d, hadamard, self.group_size).contiguous()
++            if kernel is not None and source.device.type == "cuda":
++                output = kernel.triton_int8_linear_per_row(
++                    rotated,
++                    self.weight,
++                    self.weight_scale,
++                    self.bias,
++                    compute_dtype,
++                )
++            else:
++                dequant_weight = self.weight.to(torch.float32) * self.weight_scale
++                output = F.linear(
++                    rotated.to(torch.float32),
++                    dequant_weight,
++                    self.bias.to(torch.float32) if self.bias is not None else None,
++                ).to(compute_dtype)
++        return output.reshape(*original_shape[:-1], self.out_features)
++
++    def forward(self, source):
++        if self.sparse:
++            return source.replace(self._forward_tensor(source.feats))
++        return self._forward_tensor(source)
++
++    def extra_repr(self) -> str:
++        return (
++            f"in_features={self.in_features}, out_features={self.out_features}, "
++            f"bias={self.bias is not None}, sparse={self.sparse}, "
++            f"cache_context={self.cache_context}, group_size={self.group_size}"
++        )
++
++
++def _parse_quant_record(raw: Tensor, key: str) -> dict[str, Any]:
++    try:
++        record = json.loads(bytes(raw.tolist()).decode("utf-8"))
++    except Exception as exc:
++        raise ValueError(f"Invalid comfy_quant record {key}") from exc
++    if record.get("format") != "int8_tensorwise" or record.get("convrot") is not True:
++        raise ValueError(f"Unsupported ConvRot quantization record {key}: {record}")
++    group_size = int(record.get("convrot_groupsize", 0))
++    if group_size <= 0:
++        raise ValueError(f"Invalid ConvRot group size in {key}: {group_size}")
++    return record
++
++
++def load_component_state(
++    checkpoint: str,
++    component_prefix: str,
++) -> tuple[dict[str, Tensor], dict[str, dict[str, Any]]]:
++    """Bulk-read one component's four contiguous dtype runs from the combined file.
++
++    Per-tensor mmap faults on NTFS/FUSE cost roughly one second each. The combined
++    checkpoint stores each component in four contiguous F32/BF16/I8/U8 runs, so
++    four sequential reads eliminate that pathological GPU-materialization cost.
++    """
++    outer = f"model.{component_prefix}."
++    with open(checkpoint, "rb", buffering=0) as handle:
++        file_size = os.path.getsize(checkpoint)
++        header_size = struct.unpack("<Q", handle.read(8))[0]
++        if header_size <= 0 or header_size > file_size - 8:
++            raise ValueError(f"Invalid safetensors header size {header_size} in {checkpoint}")
++        header = json.loads(handle.read(header_size))
++        data_start = 8 + header_size
++        items = []
++        for key, record in header.items():
++            if key == "__metadata__" or not key.startswith(outer):
++                continue
++            start, end = map(int, record["data_offsets"])
++            if start < 0 or end < start or data_start + end > file_size:
++                raise ValueError(f"Invalid safetensors range {start}:{end} for {key}")
++            items.append((start, end, key, record))
++        if not items:
++            raise KeyError(f"Checkpoint {checkpoint} has no component {component_prefix!r}")
++        items.sort(key=lambda item: item[0])
++
++        runs = []
++        run_start = items[0][0]
++        run_end = items[0][1]
++        for start, end, _, _ in items[1:]:
++            if start == run_end:
++                run_end = end
++            else:
++                runs.append((run_start, run_end))
++                run_start, run_end = start, end
++        runs.append((run_start, run_end))
++        if len(runs) != 4:
++            raise ValueError(f"Expected four contiguous ConvRot dtype runs, found {runs}")
++
++        buffers = []
++        for start, end in runs:
++            buffer = bytearray(end - start)
++            handle.seek(data_start + start)
++            if handle.readinto(buffer) != len(buffer):
++                raise EOFError(f"Short read for ConvRot range {start}:{end}")
++            buffers.append((start, end, buffer))
++
++    dtype_map = {
++        "F32": torch.float32,
++        "BF16": torch.bfloat16,
++        "I8": torch.int8,
++        "U8": torch.uint8,
++    }
++    state: dict[str, Tensor] = {}
++    quant_records: dict[str, dict[str, Any]] = {}
++    for start, end, key, record in items:
++        dtype_name = record["dtype"]
++        if dtype_name not in dtype_map:
++            raise ValueError(f"Unsupported dtype {dtype_name} in {key}")
++        owner_start, _, owner = next(run for run in buffers if run[0] <= start and end <= run[1])
++        shape = tuple(int(dim) for dim in record["shape"])
++        count = 1
++        for dim in shape:
++            count *= dim
++        dtype = dtype_map[dtype_name]
++        expected_bytes = count * torch.empty((), dtype=dtype).element_size()
++        if end - start != expected_bytes:
++            raise ValueError(f"Safetensors byte-size mismatch for {key}")
++        tensor = torch.frombuffer(
++            owner,
++            dtype=dtype,
++            count=count,
++            offset=start - owner_start,
++        ).reshape(shape)
++        local_key = key[len(outer):]
++        if local_key.endswith(".comfy_quant"):
++            module_name = local_key[: -len(".comfy_quant")]
++            quant_records[module_name] = _parse_quant_record(tensor, key)
++        else:
++            state[local_key] = tensor
++    return state, quant_records
++
++
++def load_owned_safetensors(checkpoint: str) -> dict[str, Tensor]:
++    """Load a complete safetensors file with one sequential read into owned RAM."""
++    dtype_map = {
++        "F64": torch.float64,
++        "F32": torch.float32,
++        "F16": torch.float16,
++        "BF16": torch.bfloat16,
++        "I64": torch.int64,
++        "I32": torch.int32,
++        "I16": torch.int16,
++        "I8": torch.int8,
++        "U8": torch.uint8,
++        "BOOL": torch.bool,
++    }
++    with open(checkpoint, "rb", buffering=0) as handle:
++        file_size = os.path.getsize(checkpoint)
++        header_size = struct.unpack("<Q", handle.read(8))[0]
++        if header_size <= 0 or header_size > file_size - 8:
++            raise ValueError(f"Invalid safetensors header size {header_size} in {checkpoint}")
++        header = json.loads(handle.read(header_size))
++        records = [record for key, record in header.items() if key != "__metadata__"]
++        if not records:
++            raise ValueError(f"No tensors in {checkpoint}")
++        data_size = max(int(record["data_offsets"][1]) for record in records)
++        if 8 + header_size + data_size > file_size:
++            raise ValueError(f"Safetensors data range exceeds file size in {checkpoint}")
++        owner = bytearray(data_size)
++        if handle.readinto(owner) != data_size:
++            raise EOFError(f"Short read for {checkpoint}")
++
++    state = {}
++    for key, record in header.items():
++        if key == "__metadata__":
++            continue
++        dtype_name = record["dtype"]
++        if dtype_name not in dtype_map:
++            raise ValueError(f"Unsupported dtype {dtype_name} in {key}")
++        shape = tuple(int(dim) for dim in record["shape"])
++        count = 1
++        for dim in shape:
++            count *= dim
++        start, end = map(int, record["data_offsets"])
++        dtype = dtype_map[dtype_name]
++        expected_bytes = count * torch.empty((), dtype=dtype).element_size()
++        if start < 0 or end < start or end - start != expected_bytes or end > len(owner):
++            raise ValueError(f"Invalid safetensors range for {key}: {start}:{end}")
++        state[key] = torch.frombuffer(
++            owner, dtype=dtype, count=count, offset=start
++        ).reshape(shape)
++    return state
++
++
++def replace_convrot_linears(
++    model: nn.Module,
++    state: dict[str, Tensor],
++    quant_records: dict[str, dict[str, Any]],
++) -> int:
++    """Replace every manifest-targeted torch/Sparse linear before assigning checkpoint tensors."""
++    from ..modules.sparse.linear import SparseLinear
++
++    replaced = 0
++    for module_name, record in quant_records.items():
++        parent_name, _, child_name = module_name.rpartition(".")
++        parent = model.get_submodule(parent_name) if parent_name else model
++        original = getattr(parent, child_name)
++        if not isinstance(original, nn.Linear):
++            raise TypeError(f"ConvRot target {module_name} is not a Linear: {type(original).__name__}")
++        weight_key = f"{module_name}.weight"
++        scale_key = f"{module_name}.weight_scale"
++        if weight_key not in state or state[weight_key].dtype != torch.int8:
++            raise ValueError(f"Missing INT8 weight for {module_name}")
++        if scale_key not in state or state[scale_key].dtype != torch.float32:
++            raise ValueError(f"Missing FP32 row scales for {module_name}")
++        expected_shape = (original.out_features, original.in_features)
++        if tuple(state[weight_key].shape) != expected_shape:
++            raise ValueError(
++                f"ConvRot shape mismatch for {module_name}: {tuple(state[weight_key].shape)} != {expected_shape}"
++            )
++        replacement = ConvRotLinear(
++            original.in_features,
++            original.out_features,
++            bias=original.bias is not None,
++            sparse=isinstance(original, SparseLinear),
++            cache_context=module_name.endswith("cross_attn.to_kv"),
++            group_size=int(record["convrot_groupsize"]),
++            device="meta",
++        )
++        setattr(parent, child_name, replacement)
++        replaced += 1
++    return replaced
++
++
++def _materialize_rope_phases(model: nn.Module) -> None:
++    rope_phases = getattr(model, "rope_phases", None)
++    if rope_phases is None or not rope_phases.is_meta:
++        return
++    from ..modules.attention.rope import RotaryPositionEmbedder
++
++    resolution = int(model.resolution)
++    embedder = RotaryPositionEmbedder(model.model_channels // model.num_heads, 3)
++    coords = torch.meshgrid(
++        *[torch.arange(resolution) for _ in range(3)], indexing="ij"
++    )
++    coords = torch.stack(coords, dim=-1).reshape(-1, 3)
++    model.rope_phases = embedder(coords)
++
++
++def _materialize_sparse_rope_freqs(model: nn.Module) -> None:
++    for module in model.modules():
++        freqs = getattr(module, "freqs", None)
++        if isinstance(freqs, Tensor) and freqs.is_meta and hasattr(module, "freq_dim"):
++            values = torch.arange(module.freq_dim, dtype=torch.float32) / module.freq_dim
++            module.freqs = module.rope_freq[0] / (module.rope_freq[1] ** values)
++
++
++def load_convrot_model(
++    *,
++    model_class,
++    config: dict[str, Any],
++    checkpoint: str,
++    component_prefix: str,
++    model_kwargs: dict[str, Any] | None = None,
++) -> nn.Module:
++    """Build a TRELLIS model on meta, replace 210 linears, and assign one checkpoint component."""
++    if not os.path.isfile(checkpoint):
++        raise FileNotFoundError(checkpoint)
++    state, quant_records = load_component_state(checkpoint, component_prefix)
++    kwargs = {**config["args"], **(model_kwargs or {})}
++    with torch.device("meta"):
++        model = model_class(**kwargs)
++    replaced = replace_convrot_linears(model, state, quant_records)
++    if replaced != len(quant_records) or replaced != 210:
++        raise ValueError(
++            f"Expected exactly 210 ConvRot linears for {component_prefix}, replaced {replaced} of {len(quant_records)}"
++        )
++    incompatible = model.load_state_dict(state, strict=False, assign=True)
++    _materialize_rope_phases(model)
++    _materialize_sparse_rope_freqs(model)
++    missing = [key for key in incompatible.missing_keys if not key.endswith("rope_phases")]
++    if missing or incompatible.unexpected_keys:
++        raise ValueError(
++            f"ConvRot state mismatch for {component_prefix}: missing={missing}, unexpected={incompatible.unexpected_keys}"
++        )
++    meta = [name for name, tensor in list(model.named_parameters()) + list(model.named_buffers()) if tensor.is_meta]
++    if meta:
++        raise ValueError(f"ConvRot model retained meta tensors: {meta}")
++    model._convrot_component_prefix = component_prefix
++    model._convrot_checkpoint = checkpoint
++    model._cache_condition_casts = True
++    logger.info("Loaded %s with %d ConvRot linears", component_prefix, replaced)
++    return model
+diff --git a/trellis2_gguf/utils/gguf_utils.py b/trellis2_gguf/utils/gguf_utils.py
+index 5be7118..0327581 100644
+--- a/trellis2_gguf/utils/gguf_utils.py
++++ b/trellis2_gguf/utils/gguf_utils.py
+@@ -642,9 +642,21 @@ HAS_GGUF_OPS = True
+ 
+ if 'GGMLOps' not in globals() or GGMLOps is None:
+     class GGMLOpsFallback:
+-        class Linear(torch.nn.Module):
+-            def __init__(self, *args, **kwargs):
+-                super().__init__()
++        class Linear(GGMLLayer, torch.nn.Linear):
++            """Standalone GGUF linear when ComfyUI-GGUF is not installed.
++
++            GGMLLayer must participate in the MRO so quantized checkpoint tensors
++            are assigned instead of copied into full-shape Parameters.  PyTorch
++            2.14 validates the physical compressed storage during copy_(), which
++            otherwise reports misleading logical-shape mismatches.
++            """
++            def forward(self, input, *args, **kwargs):
++                return self.forward_comfy_cast_weights(input, *args, **kwargs)
++
++            def forward_comfy_cast_weights(self, input, *args, **kwargs):
++                weight, bias = self.cast_bias_weight(input)
++                return torch.nn.functional.linear(input, weight, bias)
++
+         class Conv2d(torch.nn.Module):
+             def __init__(self, *args, **kwargs):
+                 super().__init__()

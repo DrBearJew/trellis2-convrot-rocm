@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "status": "single-run observational profile; not a statistical benchmark",
+  "system": {
+    "gpu": "AMD Radeon RX 7900 XTX",
+    "architecture": "gfx1100",
+    "python": "3.12.12",
+    "pytorch": "2.14.0a0+rocm7.15.0a20260712",
+    "rocm": "7.15.0",
+    "triton": "3.8.0"
+  },
+  "workflow": {
+    "resolution": 512,
+    "sparse_structure_steps": 8,
+    "shape_steps": 8,
+    "mode": "shape-only"
+  },
+  "flow_seconds": {
+    "q4_k_m": {
+      "cold_structure": 4.927,
+      "cold_shape": 5.802,
+      "warm_structure": 0.341,
+      "warm_shape": 0.791
+    },
+    "int8_convrot": {
+      "cold_structure": 1.600,
+      "cold_shape": 2.146,
+      "warm_structure": 0.243,
+      "warm_shape": 0.679
+    }
+  },
+  "end_to_end_noncomparable_runs": {
+    "q4_k_m": {
+      "seconds": 131.67,
+      "vertices": 960471,
+      "faces": 1978942
+    },
+    "int8_convrot": {
+      "seconds": 104.04,
+      "vertices": 811704,
+      "faces": 1710874
+    },
+    "warning": "Output complexity differs materially; do not compute or publish an end-to-end speedup from these runs."
+  },
+  "single_process_acceptance_run": {
+    "seconds": 122.01,
+    "glb_bytes": 28075300,
+    "vertices": 766481,
+    "faces": 1573060,
+    "sequence": "Krea -> native TRELLIS -> Mesa GLSLShader -> Krea"
+  }
+}

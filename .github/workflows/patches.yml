@@ -1,0 +1,76 @@
+name: release-contract
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install contract-test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install safetensors scipy
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Clone pinned upstreams
+        run: |
+          clone_for_patch() {
+            local url=$1 destination=$2 revision=$3 patch=$4 patterns
+            patterns=$(mktemp)
+            sed -n -e 's|^--- a/||p' -e 's|^+++ b/||p' "$patch" \
+              | grep -v '^/dev/null$' | sort -u > "$patterns"
+            git clone --filter=blob:none --no-checkout "$url" "$destination"
+            git -C "$destination" sparse-checkout init --no-cone
+            git -C "$destination" sparse-checkout set --no-cone --stdin < "$patterns"
+            git -C "$destination" checkout "$revision"
+            rm -f "$patterns"
+          }
+          clone_for_patch \
+            https://github.com/comfyanonymous/ComfyUI.git /tmp/comfyui \
+            c2638ce6c00e3426c48d56a775bc46e9a8464094 patches/comfyui-core-gpl3.patch
+          clone_for_patch \
+            https://github.com/Aero-Ex/ComfyUI-Trellis2-GGUF.git /tmp/trellis \
+            6bd11ead7ab7976ec4b2c47db52701f4c76a54e2 patches/trellis2-gguf-mit.patch
+          clone_for_patch \
+            https://github.com/patientx/ComfyUI-INT8-Fast-ROCM.git /tmp/backend \
+            5e365a2d02058a3c6d57405ae07bb99a3804c7cc patches/int8-fast-rocm-agpl.patch
+      - name: Apply pinned patches
+        run: |
+          scripts/apply-patches.sh \
+            --comfyui /tmp/comfyui \
+            --trellis-node /tmp/trellis \
+            --int8-backend /tmp/backend
+      - name: Check Python and shell syntax
+        run: |
+          python -m py_compile \
+            /tmp/comfyui/comfy_extras/nodes_glsl.py \
+            /tmp/trellis/trellis2_gguf/utils/convrot_utils.py \
+            /tmp/backend/int8_fused_kernel.py \
+            /tmp/backend/convrot_cache.py \
+            scripts/build-checkpoint.py \
+            scripts/validate-checkpoint.py \
+            scripts/verify-bitpoet-checkpoint.py \
+            scripts/verify-native-contract.py \
+            scripts/check-publication.py
+          bash -n scripts/apply-patches.sh scripts/start-comfyui-native.sh
+      - name: Run checkpoint contract regressions
+        env:
+          TRELLIS_TEST_INT8_BACKEND: /tmp/backend
+          TRELLIS_TEST_NODE: /tmp/trellis
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Check publication surface
+        run: python scripts/check-publication.py
+      - name: Verify guarded rollback
+        run: |
+          scripts/apply-patches.sh --reverse \
+            --comfyui /tmp/comfyui \
+            --trellis-node /tmp/trellis \
+            --int8-backend /tmp/backend
+          git -C /tmp/comfyui diff --exit-code
+          git -C /tmp/trellis diff --exit-code
+          git -C /tmp/backend diff --exit-code

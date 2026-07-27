@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-backend/
+*.partial
+*.safetensors
+*.gguf
+*.glb
+*.png
+.env

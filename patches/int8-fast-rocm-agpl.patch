@@ -1,0 +1,367 @@
+diff --git a/convrot_cache.py b/convrot_cache.py
+new file mode 100644
+index 0000000..bef9cc4
+--- /dev/null
++++ b/convrot_cache.py
+@@ -0,0 +1,102 @@
++"""Bounded activation cache for reusable ConvRot preprocessing."""
++
++from collections import OrderedDict
++import weakref
++
++import torch
++from torch import Tensor, nn
++
++from .convrot import build_hadamard, rotate_activation
++from .int8_fused_kernel import triton_quantize_rowwise
++
++_CONVROT_ACTIVATION_CACHE = OrderedDict()
++_CONVROT_ACTIVATION_CACHE_MAX = 8
++_CONVROT_ACTIVATION_CACHE_HITS = 0
++_CONVROT_ACTIVATION_CACHE_MISSES = 0
++
++
++def _tensor_version(source: Tensor) -> int | None:
++    """Inference tensors are immutable by cache contract and have no version counter."""
++    try:
++        return int(source._version)
++    except RuntimeError:
++        return None
++
++
++def clear_convrot_activation_cache() -> None:
++    global _CONVROT_ACTIVATION_CACHE_HITS, _CONVROT_ACTIVATION_CACHE_MISSES
++    _CONVROT_ACTIVATION_CACHE.clear()
++    _CONVROT_ACTIVATION_CACHE_HITS = 0
++    _CONVROT_ACTIVATION_CACHE_MISSES = 0
++
++
++def convrot_activation_cache_stats() -> dict[str, int]:
++    return {
++        "entries": len(_CONVROT_ACTIVATION_CACHE),
++        "hits": _CONVROT_ACTIVATION_CACHE_HITS,
++        "misses": _CONVROT_ACTIVATION_CACHE_MISSES,
++    }
++
++
++def enable_convrot_context_cache(model: nn.Module) -> int:
++    """Mark cross-attention to_kv layers for shared ConvRot preprocessing."""
++    count = 0
++    for name, module in model.named_modules():
++        if name.endswith("cross_attn.to_kv") and getattr(module, "_use_convrot", False):
++            module._cache_convrot_activation = True
++            count += 1
++    return count
++
++
++def prepare_convrot_activation_cached(
++    source: Tensor,
++    compute_dtype: torch.dtype,
++    group_size: int,
++) -> tuple[Tensor, Tensor]:
++    """Rotate and row-quantize once per live tensor version and HIP stream.
++
++    Inference tensors have no version counter; callers must treat them as immutable,
++    which matches ComfyUI's inference-mode conditioning contract.
++    """
++    global _CONVROT_ACTIVATION_CACHE_HITS, _CONVROT_ACTIVATION_CACHE_MISSES
++    if source.device.type != "cuda":
++        raise ValueError("ConvRot activation caching requires a CUDA/HIP tensor")
++    key = (
++        id(source),
++        str(source.device),
++        int(torch.cuda.current_stream(source.device).cuda_stream),
++        source.dtype,
++        tuple(source.shape),
++        tuple(source.stride()),
++        int(source.storage_offset()),
++        compute_dtype,
++        int(group_size),
++    )
++    version = _tensor_version(source)
++    entry = _CONVROT_ACTIVATION_CACHE.get(key)
++    if entry is not None and entry[0]() is source and entry[1] == version:
++        _CONVROT_ACTIVATION_CACHE.move_to_end(key)
++        _CONVROT_ACTIVATION_CACHE_HITS += 1
++        return entry[2], entry[3]
++    if entry is not None:
++        _CONVROT_ACTIVATION_CACHE.pop(key, None)
++
++    x_2d = source.reshape(-1, source.shape[-1])
++    if x_2d.dtype != compute_dtype:
++        x_2d = x_2d.to(compute_dtype)
++    hadamard = build_hadamard(group_size, device=source.device, dtype=x_2d.dtype)
++    x_rotated = rotate_activation(x_2d, hadamard, group_size=group_size).contiguous()
++    x_int8, x_scale = triton_quantize_rowwise(x_rotated)
++
++    def remove_entry(source_ref, cache_key=key):
++        current = _CONVROT_ACTIVATION_CACHE.get(cache_key)
++        if current is not None and current[0] is source_ref:
++            _CONVROT_ACTIVATION_CACHE.pop(cache_key, None)
++
++    source_ref = weakref.ref(source, remove_entry)
++    _CONVROT_ACTIVATION_CACHE[key] = (source_ref, version, x_int8, x_scale)
++    _CONVROT_ACTIVATION_CACHE.move_to_end(key)
++    while len(_CONVROT_ACTIVATION_CACHE) > _CONVROT_ACTIVATION_CACHE_MAX:
++        _CONVROT_ACTIVATION_CACHE.popitem(last=False)
++    _CONVROT_ACTIVATION_CACHE_MISSES += 1
++    return x_int8, x_scale
+diff --git a/int8_fused_kernel.py b/int8_fused_kernel.py
+index 30717d9..59c6bf2 100644
+--- a/int8_fused_kernel.py
++++ b/int8_fused_kernel.py
+@@ -326,46 +326,95 @@ def _int8_matmul_dequant_per_row_kernel(
+ # Python Wrapper (Per-Row Weight Scales)
+ # =============================================================================
+ 
+-def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_scale: torch.Tensor, bias=None, compute_dtype=torch.float16):
+-    """
+-    Fused pipeline for W8A8 Linear Layer with per-row weight quantization.
+-    weight_scale: [N, 1] per-row scales
+-    """
+-    # 1. Flatten inputs if 3D
+-    x_shape_orig = x.shape
+-    x_2d = x.reshape(-1, x_shape_orig[-1])
++def _trellis_convrot_static_config(M: int, N: int, K: int):
++    """Return measured gfx1100 configs for TRELLIS.2's five projection shapes."""
++    if (N, K) == (1536, 8192):
++        return (128, 256, 64, 8, 3)
++    if (N, K) == (1536, 1536):
++        return (64, 128, 32, 4, 4)
++    if (N, K) == (3072, 1024):
++        return (128, 256, 64, 8, 3) if M >= 7000 else (128, 64, 32, 4, 4)
++    if (N, K) == (8192, 1536):
++        return (64, 128, 32, 4, 4) if M < 3500 else (128, 128, 32, 4, 4)
++    if (N, K) == (4608, 1536):
++        if M >= 7000:
++            return (64, 128, 32, 4, 4)
++        if M >= 3500:
++            return (128, 128, 32, 4, 4)
++        return (128, 64, 32, 4, 4)
++    return None
++
++
++def triton_int8_linear_per_row_prequantized(
++    x_int8: torch.Tensor,
++    x_scale: torch.Tensor,
++    weight: torch.Tensor,
++    weight_scale: torch.Tensor,
++    bias=None,
++    compute_dtype=torch.float16,
++    trellis_static: bool = False,
++):
++    """W8A8 linear from reusable per-row quantized activations and scales.
+ 
+-    M, K = x_2d.shape
++    TRELLIS-specific gfx1100 configs are opt-in so generic INT8/Krea routes keep
++    the backend's normal autotuning behavior.
++    """
++    if x_int8.ndim != 2 or x_int8.dtype != torch.int8:
++        raise ValueError(f"x_int8 must be a 2D int8 tensor, got {x_int8.dtype} {tuple(x_int8.shape)}")
++    M, K = x_int8.shape
+     N = weight.shape[0]
+-
+-    # 2. Dynamic Activation Quantization
+-    x_int8, x_scale = triton_quantize_rowwise(x_2d)
+-
+-    # 3. Allocate Output
+-    output = torch.empty((M, N), device=x.device, dtype=compute_dtype)
+-
+-    # 4. Prepare weight scales - flatten [N, 1] -> [N] for kernel
++    if weight.ndim != 2 or weight.dtype != torch.int8 or weight.shape[1] != K:
++        raise ValueError(f"weight must be int8 [N,{K}], got {weight.dtype} {tuple(weight.shape)}")
++    if x_scale.numel() != M:
++        raise ValueError(f"x_scale has {x_scale.numel()} rows, expected {M}")
++    if weight_scale.numel() != N:
++        raise ValueError(f"weight_scale has {weight_scale.numel()} rows, expected {N}")
++
++    output = torch.empty((M, N), device=x_int8.device, dtype=compute_dtype)
++    xs = x_scale.reshape(M).contiguous()
+     ws = weight_scale.reshape(N).contiguous()
+-
+-    # 5. Fused GEMM + Per-Row Dequant
+-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
+-
++    grid = lambda META: (
++        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
++    )
+     has_bias = bias is not None
+-    bias_ptr = bias if has_bias else x  # Dummy pointer if None
++    bias_ptr = bias if has_bias else xs
+ 
+-    _int8_matmul_dequant_per_row_kernel[grid](
++    launch_args = dict(
+         a_ptr=x_int8,
+         b_ptr=weight,
+         c_ptr=output,
+-        a_scale_ptr=x_scale,
++        a_scale_ptr=xs,
+         b_scale_ptr=ws,
+         bias_ptr=bias_ptr,
+         M=M, N=N, K=K,
+         stride_am=x_int8.stride(0), stride_ak=x_int8.stride(1),
+         stride_bk=weight.stride(1), stride_bn=weight.stride(0),
+         stride_cm=output.stride(0), stride_cn=output.stride(1),
+-        HAS_BIAS=has_bias
++        HAS_BIAS=has_bias,
+     )
++    static = _trellis_convrot_static_config(M, N, K) if trellis_static else None
++    if static is None:
++        _int8_matmul_dequant_per_row_kernel[grid](**launch_args)
++    else:
++        block_m, block_n, block_k, num_warps, num_stages = static
++        _int8_matmul_dequant_per_row_kernel.fn[grid](
++            **launch_args,
++            BLOCK_M=block_m,
++            BLOCK_N=block_n,
++            BLOCK_K=block_k,
++            GROUP_SIZE_M=8,
++            num_warps=num_warps,
++            num_stages=num_stages,
++        )
++    return output
+ 
+-    # 6. Reshape output
+-    return output.reshape(x_shape_orig[:-1] + (N,))
++
++def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_scale: torch.Tensor, bias=None, compute_dtype=torch.float16):
++    """Fused W8A8 linear with dynamic per-row activation quantization."""
++    x_shape_orig = x.shape
++    x_2d = x.reshape(-1, x_shape_orig[-1])
++    x_int8, x_scale = triton_quantize_rowwise(x_2d)
++    output = triton_int8_linear_per_row_prequantized(
++        x_int8, x_scale, weight, weight_scale, bias, compute_dtype
++    )
++    return output.reshape(x_shape_orig[:-1] + (weight.shape[0],))
+diff --git a/tests/test_convrot_activation_cache.py b/tests/test_convrot_activation_cache.py
+new file mode 100644
+index 0000000..f90d702
+--- /dev/null
++++ b/tests/test_convrot_activation_cache.py
+@@ -0,0 +1,73 @@
++import gc
++import importlib
++from pathlib import Path
++import sys
++import types
++
++import pytest
++import torch
++
++
++ROOT = Path(__file__).resolve().parents[1]
++PACKAGE = "int8_fast_rocm_cache_tests"
++if PACKAGE not in sys.modules:
++    package = types.ModuleType(PACKAGE)
++    package.__path__ = [str(ROOT)]
++    sys.modules[PACKAGE] = package
++
++cache = importlib.import_module(f"{PACKAGE}.convrot_cache")
++
++
++def _require_rocm():
++    if not torch.cuda.is_available() or torch.version.hip is None:
++        pytest.skip("requires a ROCm GPU")
++
++
++def test_enable_convrot_context_cache_marks_only_to_kv_layers():
++    model = torch.nn.Module()
++    model.blocks = torch.nn.ModuleList()
++    for _ in range(30):
++        block = torch.nn.Module()
++        block.cross_attn = torch.nn.Module()
++        block.cross_attn.to_kv = torch.nn.Linear(16, 32)
++        block.cross_attn.to_kv._use_convrot = True
++        block.cross_attn.to_q = torch.nn.Linear(16, 16)
++        block.cross_attn.to_q._use_convrot = True
++        model.blocks.append(block)
++
++    assert cache.enable_convrot_context_cache(model) == 30
++    assert all(block.cross_attn.to_kv._cache_convrot_activation for block in model.blocks)
++    assert all(not hasattr(block.cross_attn.to_q, "_cache_convrot_activation") for block in model.blocks)
++
++
++def test_convrot_context_cache_hits_replaces_mutated_version_and_releases():
++    _require_rocm()
++    cache.clear_convrot_activation_cache()
++    source = torch.randn(1, 1029, 1024, device="cuda", dtype=torch.bfloat16)
++
++    q1, scale1 = cache.prepare_convrot_activation_cached(source, torch.bfloat16, 256)
++    q2, scale2 = cache.prepare_convrot_activation_cached(source, torch.bfloat16, 256)
++    assert q2.data_ptr() == q1.data_ptr()
++    assert scale2.data_ptr() == scale1.data_ptr()
++    assert cache.convrot_activation_cache_stats() == {"entries": 1, "hits": 1, "misses": 1}
++
++    source.add_(1)
++    q3, _ = cache.prepare_convrot_activation_cached(source, torch.bfloat16, 256)
++    assert q3.data_ptr() != q1.data_ptr()
++    assert cache.convrot_activation_cache_stats() == {"entries": 1, "hits": 1, "misses": 2}
++
++    del source
++    gc.collect()
++    assert cache.convrot_activation_cache_stats()["entries"] == 0
++
++
++def test_convrot_context_cache_supports_inference_tensors():
++    _require_rocm()
++    cache.clear_convrot_activation_cache()
++    with torch.inference_mode():
++        source = torch.randn(1, 1029, 1024, device="cuda", dtype=torch.bfloat16)
++        q1, scale1 = cache.prepare_convrot_activation_cached(source, torch.bfloat16, 256)
++        q2, scale2 = cache.prepare_convrot_activation_cached(source, torch.bfloat16, 256)
++    assert q2.data_ptr() == q1.data_ptr()
++    assert scale2.data_ptr() == scale1.data_ptr()
++    assert cache.convrot_activation_cache_stats() == {"entries": 1, "hits": 1, "misses": 1}
+diff --git a/tests/test_int8_prequantized.py b/tests/test_int8_prequantized.py
+new file mode 100644
+index 0000000..4a4d9fb
+--- /dev/null
++++ b/tests/test_int8_prequantized.py
+@@ -0,0 +1,47 @@
++import importlib
++from pathlib import Path
++import sys
++import types
++
++import pytest
++import torch
++
++
++ROOT = Path(__file__).resolve().parents[1]
++PACKAGE = "int8_fast_rocm_prequant_tests"
++if PACKAGE not in sys.modules:
++    package = types.ModuleType(PACKAGE)
++    package.__path__ = [str(ROOT)]
++    sys.modules[PACKAGE] = package
++
++kernel = importlib.import_module(f"{PACKAGE}.int8_fused_kernel")
++
++
++def _require_rocm():
++    if not torch.cuda.is_available() or torch.version.hip is None:
++        pytest.skip("requires a ROCm GPU")
++
++
++def test_trellis_static_configs_cover_known_shapes_only():
++    assert kernel._trellis_convrot_static_config(4096, 4608, 1536) == (128, 128, 32, 4, 4)
++    assert kernel._trellis_convrot_static_config(8398, 1536, 8192) == (128, 256, 64, 8, 3)
++    assert kernel._trellis_convrot_static_config(2875, 8192, 1536) == (64, 128, 32, 4, 4)
++    assert kernel._trellis_convrot_static_config(123, 777, 555) is None
++
++
++def test_prequantized_int8_linear_matches_dynamic_path():
++    _require_rocm()
++    m, n, k = 37, 192, 256
++    x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16)
++    weight = torch.randint(-128, 128, (n, k), device="cuda", dtype=torch.int8)
++    weight_scale = torch.rand(n, 1, device="cuda", dtype=torch.float32) * 0.01
++    bias = torch.randn(n, device="cuda", dtype=torch.bfloat16)
++
++    expected = kernel.triton_int8_linear_per_row(
++        x, weight, weight_scale, bias, torch.bfloat16
++    )
++    x_int8, x_scale = kernel.triton_quantize_rowwise(x)
++    actual = kernel.triton_int8_linear_per_row_prequantized(
++        x_int8, x_scale, weight, weight_scale, bias, torch.bfloat16
++    )
++    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
