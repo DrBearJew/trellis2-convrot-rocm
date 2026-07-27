@@ -1,0 +1,125 @@
+{
+  "id": "6ecb8883-d1b5-4b17-8e35-cb1b82fb7a3f",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Trellis2LoadModel_GGUF",
+      "pos": [40, 40],
+      "size": [320, 190],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "pipeline", "type": "TRELLIS2PIPELINE", "links": [1]}
+      ],
+      "properties": {"Node name for S&R": "Trellis2LoadModel_GGUF"},
+      "widgets_values": ["TRELLIS.2-4B", "INT8 ConvRot", "sdpa", "cuda", true, false]
+    },
+    {
+      "id": 2,
+      "type": "Trellis2LoadImageWithTransparency_GGUF",
+      "pos": [40, 300],
+      "size": [320, 330],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "image", "type": "IMAGE", "links": [2]},
+        {"name": "mask", "type": "MASK", "links": null},
+        {"name": "image_with_alpha", "type": "IMAGE", "links": null}
+      ],
+      "properties": {"Node name for S&R": "Trellis2LoadImageWithTransparency_GGUF"},
+      "widgets_values": ["input.png", "image"]
+    },
+    {
+      "id": 3,
+      "type": "Trellis2PreProcessImage_GGUF",
+      "pos": [440, 330],
+      "size": [280, 110],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 2}
+      ],
+      "outputs": [
+        {"name": "image", "type": "IMAGE", "links": [3]}
+      ],
+      "properties": {"Node name for S&R": "Trellis2PreProcessImage_GGUF"},
+      "widgets_values": [0, true]
+    },
+    {
+      "id": 4,
+      "type": "Trellis2MeshWithVoxelGenerator_GGUF",
+      "pos": [800, 90],
+      "size": [350, 350],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "pipeline", "type": "TRELLIS2PIPELINE", "link": 1},
+        {"name": "image", "type": "IMAGE", "link": 3}
+      ],
+      "outputs": [
+        {"name": "mesh", "type": "MESHWITHVOXEL", "links": [4]},
+        {"name": "bvh", "type": "BVH", "links": null}
+      ],
+      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelGenerator_GGUF"},
+      "widgets_values": [271828, "fixed", "1024", 8, 8, 8, 49152, 32, 1, false, false, "euler"]
+    },
+    {
+      "id": 5,
+      "type": "Trellis2MeshWithVoxelToTrimesh_GGUF",
+      "pos": [1230, 110],
+      "size": [300, 190],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "mesh", "type": "MESHWITHVOXEL", "link": 4}
+      ],
+      "outputs": [
+        {"name": "trimesh", "type": "TRIMESH", "links": [5]}
+      ],
+      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelToTrimesh_GGUF"},
+      "widgets_values": ["90 degrees", 0.0, 0.0, 0.0]
+    },
+    {
+      "id": 6,
+      "type": "Trellis2ExportMesh_GGUF",
+      "pos": [1610, 120],
+      "size": [300, 110],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "trimesh", "type": "TRIMESH", "link": 5}
+      ],
+      "outputs": [
+        {"name": "glb_path", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "Trellis2ExportMesh_GGUF"},
+      "widgets_values": ["3D/trellis2_convrot_1024_shape", "glb"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 4, 0, "TRELLIS2PIPELINE"],
+    [2, 2, 0, 3, 0, "IMAGE"],
+    [3, 3, 0, 4, 1, "IMAGE"],
+    [4, 4, 0, 5, 0, "MESHWITHVOXEL"],
+    [5, 5, 0, 6, 0, "TRIMESH"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {"scale": 0.75, "offset": [70, 140]},
+    "frontendVersion": "1.34.9",
+    "workflowRendererVersion": "LG"
+  },
+  "version": 0.4
+}

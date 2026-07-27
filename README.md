@@ -82,7 +82,9 @@ Start ComfyUI:
   --port 8188
 ```
 
-Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF`. The BitPoet checkpoint supports 512 shape generation plus complete 1024 and 1024-cascade flow routing. The locally rebuilt three-component checkpoint supports the 512 route. A ready API example is included at [`workflows/trellis2_convrot_bitpoet_1024_shape.json`](workflows/trellis2_convrot_bitpoet_1024_shape.json).
+Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF`. The BitPoet checkpoint supports 512 shape generation plus complete 1024 and 1024-cascade flow routing. The locally rebuilt three-component checkpoint supports the 512 route.
+
+For a ready-to-use ComfyUI graph, download and drag [`workflows/trellis2_convrot_bitpoet_1024.workflow.json`](workflows/trellis2_convrot_bitpoet_1024.workflow.json) onto the canvas, choose an input image, and queue it. A separate [`API payload`](workflows/trellis2_convrot_bitpoet_1024.api.json) is included for automation.
 
 The first load downloads the normal TRELLIS support assets such as DINO, encoders, decoders, and architecture configs. It does not download duplicate BF16 flow weights.
 
