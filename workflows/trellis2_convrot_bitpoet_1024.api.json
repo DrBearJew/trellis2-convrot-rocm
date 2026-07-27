@@ -1,6 +1,6 @@
 {
   "1": {
-    "class_type": "Trellis2LoadModel_GGUF",
+    "class_type": "Trellis2LoadModel_ConvRot",
     "inputs": {
       "modelname": "TRELLIS.2-4B",
       "model_format": "INT8 ConvRot",
@@ -17,7 +17,7 @@
     }
   },
   "3": {
-    "class_type": "Trellis2PreProcessImage_GGUF",
+    "class_type": "Trellis2PreProcessImage",
     "inputs": {
       "image": ["2", 0],
       "padding": 0,
@@ -25,7 +25,7 @@
     }
   },
   "4": {
-    "class_type": "Trellis2MeshWithVoxelGenerator_GGUF",
+    "class_type": "Trellis2MeshWithVoxelGenerator",
     "inputs": {
       "pipeline": ["1", 0],
       "image": ["3", 0],
@@ -43,7 +43,7 @@
     }
   },
   "5": {
-    "class_type": "Trellis2MeshWithVoxelToTrimesh_GGUF",
+    "class_type": "Trellis2MeshWithVoxelToTrimesh",
     "inputs": {
       "mesh": ["4", 0],
       "reorient_vertices": "90 degrees",
@@ -53,7 +53,7 @@
     }
   },
   "6": {
-    "class_type": "Trellis2ExportMesh_GGUF",
+    "class_type": "Trellis2ExportMesh",
     "inputs": {
       "trimesh": ["5", 0],
       "filename_prefix": "3D/trellis2_convrot_1024_shape",

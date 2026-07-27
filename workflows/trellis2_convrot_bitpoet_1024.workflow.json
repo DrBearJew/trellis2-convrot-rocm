@@ -6,7 +6,7 @@
   "nodes": [
     {
       "id": 1,
-      "type": "Trellis2LoadModel_GGUF",
+      "type": "Trellis2LoadModel_ConvRot",
       "title": "Load TRELLIS.2 Model — select INT8 ConvRot",
       "pos": [40, 40],
       "size": [320, 190],
@@ -17,7 +17,7 @@
       "outputs": [
         {"name": "pipeline", "type": "TRELLIS2PIPELINE", "links": [1]}
       ],
-      "properties": {"Node name for S&R": "Trellis2LoadModel_GGUF"},
+      "properties": {"Node name for S&R": "Trellis2LoadModel_ConvRot"},
       "widgets_values": ["TRELLIS.2-4B", "INT8 ConvRot", "sdpa", "cuda", true, false]
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "id": 3,
-      "type": "Trellis2PreProcessImage_GGUF",
+      "type": "Trellis2PreProcessImage",
       "title": "Preprocess Input Image",
       "pos": [440, 330],
       "size": [280, 110],
@@ -52,12 +52,12 @@
       "outputs": [
         {"name": "image", "type": "IMAGE", "links": [3]}
       ],
-      "properties": {"Node name for S&R": "Trellis2PreProcessImage_GGUF"},
+      "properties": {"Node name for S&R": "Trellis2PreProcessImage"},
       "widgets_values": [0, true]
     },
     {
       "id": 4,
-      "type": "Trellis2MeshWithVoxelGenerator_GGUF",
+      "type": "Trellis2MeshWithVoxelGenerator",
       "title": "Generate 1024 Mesh — INT8 ConvRot",
       "pos": [800, 90],
       "size": [350, 350],
@@ -72,12 +72,12 @@
         {"name": "mesh", "type": "MESHWITHVOXEL", "links": [4]},
         {"name": "bvh", "type": "BVH", "links": null}
       ],
-      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelGenerator_GGUF"},
+      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelGenerator"},
       "widgets_values": [271828, "fixed", "1024", 8, 8, 8, 49152, 32, 1, false, false, "euler"]
     },
     {
       "id": 5,
-      "type": "Trellis2MeshWithVoxelToTrimesh_GGUF",
+      "type": "Trellis2MeshWithVoxelToTrimesh",
       "title": "Convert to Trimesh",
       "pos": [1230, 110],
       "size": [300, 190],
@@ -90,12 +90,12 @@
       "outputs": [
         {"name": "trimesh", "type": "TRIMESH", "links": [5]}
       ],
-      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelToTrimesh_GGUF"},
+      "properties": {"Node name for S&R": "Trellis2MeshWithVoxelToTrimesh"},
       "widgets_values": ["90 degrees", 0.0, 0.0, 0.0]
     },
     {
       "id": 6,
-      "type": "Trellis2ExportMesh_GGUF",
+      "type": "Trellis2ExportMesh",
       "title": "Export GLB",
       "pos": [1610, 120],
       "size": [300, 110],
@@ -108,7 +108,7 @@
       "outputs": [
         {"name": "glb_path", "type": "STRING", "links": null}
       ],
-      "properties": {"Node name for S&R": "Trellis2ExportMesh_GGUF"},
+      "properties": {"Node name for S&R": "Trellis2ExportMesh"},
       "widgets_values": ["3D/trellis2_convrot_1024_shape", "glb"]
     }
   ],

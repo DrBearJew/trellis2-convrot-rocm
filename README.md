@@ -82,9 +82,9 @@ Start ComfyUI:
   --port 8188
 ```
 
-Select **INT8 ConvRot** in **Trellis2 - Load Model (GGUF or INT8 ConvRot)**. The BitPoet checkpoint supports 512 shape generation plus complete 1024 and 1024-cascade flow routing. The locally rebuilt three-component checkpoint supports the 512 route.
+Use the dedicated **Trellis2 - Load Model (INT8 ConvRot)** node. The BitPoet checkpoint supports 512 shape generation plus complete 1024 and 1024-cascade flow routing. The locally rebuilt three-component checkpoint supports the 512 route.
 
-> **Naming note:** `ComfyUI-Trellis2-GGUF` is the upstream extension name, and its internal node IDs retain `_GGUF` for workflow compatibility. The INT8 ConvRot route loads the `.safetensors` checkpoint above; it does **not** require TRELLIS GGUF flow weights.
+> **Naming note:** `ComfyUI-Trellis2-GGUF` is the upstream extension name. Existing `_GGUF` node IDs remain available only for compatibility, while this patch adds format-neutral aliases and a dedicated ConvRot loader. The ConvRot route loads the `.safetensors` checkpoint above; it does **not** require TRELLIS GGUF flow weights.
 
 For a ready-to-use ComfyUI graph, download and drag [`workflows/trellis2_convrot_bitpoet_1024.workflow.json`](workflows/trellis2_convrot_bitpoet_1024.workflow.json) onto the canvas, choose an input image, and queue it. The graph uses ComfyUI's standard **Load Image** node and explicit INT8 ConvRot titles. A separate [`API payload`](workflows/trellis2_convrot_bitpoet_1024.api.json) is included for automation.
 

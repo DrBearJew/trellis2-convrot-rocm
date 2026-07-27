@@ -167,11 +167,11 @@ There is no backend port and no proxy node. To listen beyond loopback, add your 
 In the UI:
 
 1. confirm `GLSL Shader` exists;
-2. open **Trellis2 - Load Model (GGUF or INT8 ConvRot)** and select `INT8 ConvRot`;
+2. use the dedicated **Trellis2 - Load Model (INT8 ConvRot)** node;
 3. use `pipeline_type=1024` or `1024_cascade` with the BitPoet checkpoint;
 4. use `pipeline_type=512` for 512 shape generation or with the locally rebuilt v1 checkpoint.
 
-The upstream extension directory and internal class IDs retain `GGUF` for compatibility with existing workflows. That label is not the selected model format: the ConvRot route loads `trellis_2_int8_convrot.safetensors` and does not require TRELLIS GGUF flow weights. The included GUI workflow uses ComfyUI's standard **Load Image** node to avoid suggesting otherwise.
+The upstream extension directory retains `GGUF`, and its original `_GGUF` class IDs remain registered for compatibility with existing workflows. This patch adds clean aliases and a dedicated ConvRot loader for new workflows. The ConvRot route loads `trellis_2_int8_convrot.safetensors` and does not require TRELLIS GGUF flow weights. The included GUI workflow also uses ComfyUI's standard **Load Image** node.
 
 On a clean `models/Trellis2` root, that first model selection acquires the normal non-flow runtime assets: `pipeline.json`, DINO, encoders/decoders, and all 512/1024 architecture JSON files. ConvRot replaces the BF16 flow payloads, so those multi-gigabyte weights are not downloaded a second time. Background-removal assets retain the upstream node's normal lazy acquisition behavior.
 
