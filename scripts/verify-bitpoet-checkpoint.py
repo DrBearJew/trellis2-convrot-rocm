@@ -15,7 +15,7 @@ FILENAME = "trellis_2_int8_convrot.safetensors"
 EXPECTED_BYTES = 5_253_048_192
 EXPECTED_SHA256 = "66d269c1f874d38fe491a413e16944ff208a4ae348e01fc3e97b5531b52a7f3f"
 MANIFEST = Path(__file__).resolve().parents[1] / "manifests/trellis2-convrot-v1.json"
-LEGACY_PREFIX = "model.img2shape."
+SHAPE_1024_PREFIX = "model.img2shape."
 CHUNK = 16 * 1024 * 1024
 
 
@@ -71,17 +71,17 @@ def main() -> None:
         }
         if actual != schema:
             raise SystemExit(f"BitPoet runtime tensor mismatch for {key}: {actual!r} != {schema!r}")
-    allowed = tuple(contract["required_prefixes"]) + (LEGACY_PREFIX,)
+    allowed = tuple(contract["required_prefixes"]) + (SHAPE_1024_PREFIX,)
     unknown = [key for key in records if not key.startswith(allowed)]
-    legacy_count = sum(key.startswith(LEGACY_PREFIX) for key in records)
-    if unknown or len(records) != 4_240 or legacy_count != 1_060:
+    shape_1024_count = sum(key.startswith(SHAPE_1024_PREFIX) for key in records)
+    if unknown or len(records) != 4_240 or shape_1024_count != 1_060:
         raise SystemExit(
             "BitPoet checkpoint structure mismatch: "
-            f"tensors={len(records)}, legacy={legacy_count}, unknown={unknown[:5]}"
+            f"tensors={len(records)}, shape_1024={shape_1024_count}, unknown={unknown[:5]}"
         )
     print(
         "BitPoet checkpoint: PASS "
-        f"({size} bytes, SHA256 {actual_hash}, 3 runtime components + 1 unused legacy component)"
+        f"({size} bytes, SHA256 {actual_hash}, 4 routed ConvRot components)"
     )
 
 

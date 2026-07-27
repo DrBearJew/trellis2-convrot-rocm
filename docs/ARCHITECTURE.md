@@ -26,7 +26,7 @@ This preserves the `GLSLShader` node and behavior but changes its implementation
 
 ## Native model path
 
-`Trellis2LoadModel_GGUF` selects `INT8 ConvRot` and passes the combined checkpoint to the native TRELLIS model factory. The model manager still acquires DINO, encoder/decoder payloads, and the three 512 architecture JSON files on a clean install, but skips the three BF16 flow payloads replaced by ConvRot. The adapter:
+`Trellis2LoadModel_GGUF` selects `INT8 ConvRot` and passes the combined checkpoint to the native TRELLIS model factory. The model manager still acquires DINO, encoder/decoder payloads, and all 512/1024 architecture JSON files on a clean install, but skips BF16 flow payloads replaced by ConvRot. Checkpoint metadata and available prefixes select the correct 512 or 1024 component. The adapter:
 
 1. constructs the selected flow model on the meta device;
 2. replaces exactly 210 dense/sparse linear modules with `ConvRotLinear`;

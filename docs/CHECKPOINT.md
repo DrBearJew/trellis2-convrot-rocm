@@ -2,7 +2,7 @@
 
 ## Supported runtime components
 
-The 512 native loader consumes one safetensors file with exactly these required prefixes:
+The locally rebuilt v1 checkpoint contains the three 512 components:
 
 ```text
 model.structure_model.*
@@ -10,7 +10,7 @@ model.img2shape_512.*
 model.shape2txt.*
 ```
 
-They map to the pinned BF16 source files:
+For this metadata-tagged v1 layout, `shape2txt` is the 512 texture flow. They map to the pinned BF16 source files:
 
 ```text
 ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors
@@ -88,9 +88,18 @@ Malformed JSON, renamed or unknown tensors, wrong shapes or provenance, missing 
 
 ## Published BitPoet four-component artifact
 
-[`BitPoet/TRELLIS.2-int8-convrot`](https://huggingface.co/BitPoet/TRELLIS.2-int8-convrot) publishes the 5,253,048,192-byte checkpoint used for runtime validation. It contains the same three required tensor schemas plus an unused 1,060-tensor 1024 `model.img2shape.*` component and has SHA256 `66d269c1f874d38fe491a413e16944ff208a4ae348e01fc3e97b5531b52a7f3f`.
+[`BitPoet/TRELLIS.2-int8-convrot`](https://huggingface.co/BitPoet/TRELLIS.2-int8-convrot) publishes the 5,253,048,192-byte checkpoint used for runtime validation, with SHA256 `66d269c1f874d38fe491a413e16944ff208a4ae348e01fc3e97b5531b52a7f3f`.
 
-Use `scripts/verify-bitpoet-checkpoint.py` for that exact community artifact. The three-component `validate-checkpoint.py` intentionally rejects it because it lacks the locally rebuilt v1 provenance metadata and contains the extra component. Rebuilding from the three pinned official sources produces the strict v1 contract and reduces the result by roughly 1.31 GB.
+Its component routing is:
+
+```text
+model.structure_model.*  -> shared structure flow
+model.img2shape_512.*    -> 512 image-to-shape
+model.img2shape.*        -> 1024 image-to-shape
+model.shape2txt.*        -> 1024 shape-to-texture
+```
+
+This supports 512 shape generation and complete 1024/1024-cascade flow routing. It does not contain a separate 512 texture component. `scripts/verify-bitpoet-checkpoint.py` verifies the exact community artifact; `validate-checkpoint.py` remains specific to the metadata-tagged three-component v1 rebuild.
 
 ## Distribution
 

@@ -1,5 +1,5 @@
 diff --git a/model_manager.py b/model_manager.py
-index d92aa7a..3316141 100644
+index d92aa7a..d199c46 100644
 --- a/model_manager.py
 +++ b/model_manager.py
 @@ -227,6 +227,7 @@ def ensure_model_files(
@@ -10,16 +10,14 @@ index d92aa7a..3316141 100644
      
      gguf_quant = model_format.split(" ")[1] if enable_gguf else "Q8_0"
      precision = None
-@@ -268,6 +269,22 @@ def ensure_model_files(
+@@ -268,6 +269,20 @@ def ensure_model_files(
  
      print(f"[ModelManager] Verifying {len(all_models)} model components ({model_format})...")
  
 +    requested_resolution = os.environ.get("TRELLIS2_MODEL_RESOLUTION", "").strip()
-+    if enable_convrot:
-+        if requested_resolution not in {"", "512"}:
-+            raise ValueError("INT8 ConvRot currently supports TRELLIS2_MODEL_RESOLUTION=512 only")
-+        requested_resolution = "512"
-+    if requested_resolution in {"512", "1024"}:
++    # A combined ConvRot checkpoint can expose both 512 and 1024 components.
++    # Acquire every architecture JSON; flow payloads are skipped below.
++    if not enable_convrot and requested_resolution in {"512", "1024"}:
 +        unused_resolution = "1024" if requested_resolution == "512" else "512"
 +        all_models = {
 +            key: rel_path for key, rel_path in all_models.items()
@@ -33,14 +31,14 @@ index d92aa7a..3316141 100644
      resolved = {}
      for key, rel_path in all_models.items():
          basename = rel_path.split("/")[-1]
-@@ -312,7 +329,13 @@ def ensure_model_files(
+@@ -312,7 +327,13 @@ def ensure_model_files(
  
          # ── Regular GGUF / Safetensors Download Logic ─────────────────────
          # Determine suffixes to fetch
 -        if enc_dec:
 +        if enable_convrot and not enc_dec:
-+            # ConvRot replaces only the three flow weights. Their architecture
-+            # JSON files are still required to construct the native modules.
++            # ConvRot replaces flow weights present in the combined checkpoint.
++            # Their architecture JSON files are still required to construct native modules.
 +            suffixes = [".json"]
 +            use_gguf = False
 +            prec = None
@@ -48,7 +46,7 @@ index d92aa7a..3316141 100644
              # enc/dec: always plain safetensors (fp16 in name already)
              suffixes = [".json", ".safetensors"]
              use_gguf = False
-@@ -344,6 +367,18 @@ def ensure_model_files(
+@@ -344,6 +365,18 @@ def ensure_model_files(
              except Exception as e:
                  print(f"[ModelManager] ⚠ Failed to download {hf_filename}: {e}")
  
@@ -68,7 +66,7 @@ index d92aa7a..3316141 100644
          try:
              resolved[key] = resolve_local_path(basename, enable_gguf=use_gguf,
 diff --git a/nodes.py b/nodes.py
-index e1dda3a..ff370de 100644
+index e1dda3a..7c0b932 100644
 --- a/nodes.py
 +++ b/nodes.py
 @@ -365,6 +365,7 @@ class Trellis2_GGUFLoadModel:
@@ -84,9 +82,9 @@ index e1dda3a..ff370de 100644
              pipeline_config = json.load(f)
  
 -        # This is the ONLY place that downloads model files
-+        # ConvRot uses one already-downloaded combined three-flow checkpoint.
-+        # The model manager still acquires DINO, decoders, encoders, and the
-+        # three architecture JSON files, while skipping replaced flow weights.
++        # ConvRot uses one already-downloaded combined multi-flow checkpoint.
++        # The model manager still acquires DINO, decoders, encoders, and all
++        # architecture JSON files, while skipping replaced flow weights.
 +        enable_convrot = model_format == "INT8 ConvRot"
 +        convrot_checkpoint = None
 +        if enable_convrot:
@@ -127,7 +125,7 @@ index e1dda3a..ff370de 100644
          uvs_rast = torch.cat([out_uvs * 2 - 1, torch.zeros_like(out_uvs[:, :1]), torch.ones_like(out_uvs[:, :1])], dim=-1).unsqueeze(0)
          rast = torch.zeros((1, texture_size, texture_size, 4), device='cuda', dtype=torch.float32)
 diff --git a/trellis2_gguf/models/__init__.py b/trellis2_gguf/models/__init__.py
-index 2a74803..0f7f323 100644
+index 2a74803..0c9c933 100644
 --- a/trellis2_gguf/models/__init__.py
 +++ b/trellis2_gguf/models/__init__.py
 @@ -151,6 +151,7 @@ def __getattr__(name):
@@ -138,7 +136,7 @@ index 2a74803..0f7f323 100644
                      **kwargs):
      """
      Load a model from a pretrained checkpoint.
-@@ -194,7 +195,27 @@ def from_pretrained(path: str, enable_gguf: bool = False, gguf_quant: str = "Q8_
+@@ -194,7 +195,28 @@ def from_pretrained(path: str, enable_gguf: bool = False, gguf_quant: str = "Q8_
          
      basename = os.path.basename(path)
  
@@ -158,11 +156,12 @@ index 2a74803..0f7f323 100644
 +        with open(config_file, "r") as handle:
 +            config = json.load(handle)
 +        model_class = __getattr__(config["name"])
++        checkpoint = convrot_checkpoint or get_convrot_checkpoint()
 +        return load_convrot_model(
 +            model_class=model_class,
 +            config=config,
-+            checkpoint=convrot_checkpoint or get_convrot_checkpoint(),
-+            component_prefix=checkpoint_prefix_for_path(path),
++            checkpoint=checkpoint,
++            component_prefix=checkpoint_prefix_for_path(path, checkpoint),
 +        )
  
      # ------------------------------------------------------------------ #
@@ -388,7 +387,7 @@ index f60f052..0458932 100644
      return {
          'f16': torch.float16,
 diff --git a/trellis2_gguf/pipelines/trellis2_image_to_3d.py b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
-index f3eb7dd..beffddd 100644
+index f3eb7dd..90819cf 100644
 --- a/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 +++ b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 @@ -285,6 +285,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
@@ -399,32 +398,16 @@ index f3eb7dd..beffddd 100644
                          isPixal3D: bool = False) -> "Trellis2ImageTo3DPipeline":
          """
          Load a pretrained model.
-@@ -332,6 +333,10 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -332,6 +333,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
          pipeline.sdnq_use_quantized_matmul = sdnq_use_quantized_matmul
          pipeline.sdnq_torch_compile = sdnq_torch_compile
          pipeline.sdnq_svd_rank = sdnq_svd_rank
 +        pipeline.enable_convrot = enable_convrot
 +        pipeline.convrot_checkpoint = convrot_checkpoint
-+        if enable_convrot:
-+            pipeline.default_pipeline_type = '512'
          pipeline.isPixal3D = isPixal3D
  
          pipeline._pretrained_args['models']['sparse_structure_decoder'] = os.path.join(folder_paths.models_dir,"Trellis2","decoders","Stage1","ss_dec_conv3d_16l8_fp16")
-@@ -720,6 +725,13 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-             self.pixal3d_image_cond_tex_1024 = None
-             self._cleanup_cuda()
- 
-+    def _require_convrot_512(self, resolution_or_pipeline_type) -> None:
-+        if getattr(self, 'enable_convrot', False) and str(resolution_or_pipeline_type) != '512':
-+            raise ValueError(
-+                "INT8 ConvRot is currently gated to 512: the combined checkpoint "
-+                "has no resolution tag for its single texture component"
-+            )
-+
-     def load_sparse_structure_model(self):        
-         if self.models['sparse_structure_flow_model'] is None:
-             print('Loading Sparse Structure model ...')
-@@ -732,6 +744,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -732,6 +735,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -433,7 +416,7 @@ index f3eb7dd..beffddd 100644
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['sparse_structure_flow_model'].eval()
-@@ -779,6 +793,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -779,6 +784,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -442,7 +425,7 @@ index f3eb7dd..beffddd 100644
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['shape_slat_flow_model_512'].eval()
-@@ -804,6 +820,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -804,6 +811,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -451,17 +434,16 @@ index f3eb7dd..beffddd 100644
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['tex_slat_flow_model_512'].eval()
-@@ -853,7 +871,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -853,7 +862,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
              self.models['shape_slat_decoder'] = None
              self._cleanup_cuda()
  
 -    def load_shape_slat_flow_model_1024(self):        
 +    def load_shape_slat_flow_model_1024(self):
-+        self._require_convrot_512(1024)
          if self.models['shape_slat_flow_model_1024'] is None:
              print('Loading Shape Slat Flow 1024 model ...')
              _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['shape_slat_flow_model_1024']))
-@@ -865,6 +884,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -865,6 +874,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -470,17 +452,16 @@ index f3eb7dd..beffddd 100644
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['shape_slat_flow_model_1024'].eval()
-@@ -876,7 +897,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -876,7 +887,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
              self.models['shape_slat_flow_model_1024'] = None
              self._cleanup_cuda()
  
 -    def load_tex_slat_flow_model_1024(self):        
 +    def load_tex_slat_flow_model_1024(self):
-+        self._require_convrot_512(1024)
          if self.models['tex_slat_flow_model_1024'] is None:
              print('Loading Texture Slat Flow 1024 model ...')
              _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['tex_slat_flow_model_1024']))
-@@ -888,6 +910,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -888,6 +899,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -489,31 +470,7 @@ index f3eb7dd..beffddd 100644
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['tex_slat_flow_model_1024'].eval()
-@@ -1611,6 +1635,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         """
-         # Check pipeline type
-         pipeline_type = pipeline_type or self.default_pipeline_type
-+        self._require_convrot_512(pipeline_type)
-         # if pipeline_type == '512':
-             # assert 'shape_slat_flow_model_512' in self.models, "No 512 resolution shape SLat flow model found."
-             # assert 'tex_slat_flow_model_512' in self.models, "No 512 resolution texture SLat flow model found."
-@@ -1975,6 +2000,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         """
-         if pipeline_type is None:
-             pipeline_type = self.default_pipeline_type
-+        self._require_convrot_512(pipeline_type)
-         
-         seed_all(seed)
-         
-@@ -2752,6 +2778,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         tex_sampler = 'euler',
-         max_views: int = 4
-     ) -> List[MeshWithVoxel]:
-+        self._require_convrot_512(pipeline_type)
-         
-         if isinstance(image, (list, tuple)):
-             images = list(image)
-@@ -3172,7 +3199,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -3172,7 +3185,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  
          # rasterize
          print('Finalizing mesh ...')
@@ -522,30 +479,6 @@ index f3eb7dd..beffddd 100644
          uvs_torch = torch.cat([uvs_torch * 2 - 1, torch.zeros_like(uvs_torch[:, :1]), torch.ones_like(uvs_torch[:, :1])], dim=-1).unsqueeze(0)
          rast, _ = dr.rasterize(
              ctx, uvs_torch, faces_torch,
-@@ -3280,6 +3307,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         dino_foundation_cap: float = 0.92,
-         **kwargs,
-     ):
-+        self._require_convrot_512(resolution)
-         
-         self.use_tiled_decoder_for_texture = use_tiled_decoder
-         self.tiled_decoder_size = decoder_tile_size
-@@ -3379,6 +3407,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         dino_foundation_cap: float = 0.92,
-         **kwargs,
-     ):
-+        self._require_convrot_512(resolution)
-         
-         self.use_tiled_decoder_for_texture = use_tiled_decoder
-         self.tiled_decoder_size = decoder_tile_size
-@@ -3625,6 +3654,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
-         dino_foundation_cap: float = 0.92,
-         **kwargs,
-     ):
-+        self._require_convrot_512(resolution)
-         self.use_tiled_decoder_for_texture = use_tiled_decoder
-         self.tiled_decoder_size = decoder_tile_size
-         self.tiled_decoder_overlap = decoder_overlap
 diff --git a/trellis2_gguf/pipelines/trellis2_texturing.py b/trellis2_gguf/pipelines/trellis2_texturing.py
 index 848c3db..28ed327 100644
 --- a/trellis2_gguf/pipelines/trellis2_texturing.py
@@ -587,15 +520,16 @@ index b3b4655..7f737fb 100644
      def render(
 diff --git a/trellis2_gguf/utils/convrot_utils.py b/trellis2_gguf/utils/convrot_utils.py
 new file mode 100644
-index 0000000..4214e21
+index 0000000..69fdbe1
 --- /dev/null
 +++ b/trellis2_gguf/utils/convrot_utils.py
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,485 @@
 +"""TRELLIS-native loader and linear adapters for combined ConvRot W8A8 checkpoints."""
 +
 +from __future__ import annotations
 +
 +import importlib
++from functools import lru_cache
 +import json
 +import logging
 +import os
@@ -611,11 +545,11 @@ index 0000000..4214e21
 +logger = logging.getLogger(__name__)
 +
 +_BACKEND_PACKAGE = "_trellis2_int8_fast_rocm"
-+_PREFIX_BY_BASENAME = {
-+    "ss_flow_img_dit_1_3B_64_bf16": "structure_model",
-+    "slat_flow_img2shape_dit_1_3B_512_bf16": "img2shape_512",
-+    "slat_flow_imgshape2tex_dit_1_3B_512_bf16": "shape2txt",
-+}
++_STRUCTURE_BASENAME = "ss_flow_img_dit_1_3B_64_bf16"
++_SHAPE_512_BASENAME = "slat_flow_img2shape_dit_1_3B_512_bf16"
++_SHAPE_1024_BASENAME = "slat_flow_img2shape_dit_1_3B_1024_bf16"
++_TEXTURE_512_BASENAME = "slat_flow_imgshape2tex_dit_1_3B_512_bf16"
++_TEXTURE_1024_BASENAME = "slat_flow_imgshape2tex_dit_1_3B_1024_bf16"
 +
 +
 +def get_convrot_checkpoint() -> str:
@@ -630,12 +564,45 @@ index 0000000..4214e21
 +    )
 +
 +
-+def checkpoint_prefix_for_path(path: str) -> str:
++@lru_cache(maxsize=8)
++def _checkpoint_layout(checkpoint: str) -> tuple[frozenset[str], str | None]:
++    with open(checkpoint, "rb", buffering=0) as handle:
++        header_size = struct.unpack("<Q", handle.read(8))[0]
++        header = json.loads(handle.read(header_size))
++    components = frozenset(
++        key.split(".", 2)[1]
++        for key in header
++        if key.startswith("model.") and key.count(".") >= 2
++    )
++    metadata = header.get("__metadata__") or {}
++    return components, metadata.get("contract")
++
++
++def checkpoint_prefix_for_path(path: str, checkpoint: str) -> str:
++    """Resolve a pipeline model path against the components actually in a checkpoint."""
 +    basename = os.path.basename(path.rstrip("/\\"))
-+    try:
-+        return _PREFIX_BY_BASENAME[basename]
-+    except KeyError as exc:
-+        raise ValueError(f"No ConvRot checkpoint prefix is defined for {basename!r}") from exc
++    components, contract = _checkpoint_layout(os.path.realpath(checkpoint))
++    if basename == _STRUCTURE_BASENAME:
++        candidates = ("structure_model",)
++    elif basename == _SHAPE_512_BASENAME:
++        candidates = ("img2shape_512",)
++    elif basename == _SHAPE_1024_BASENAME:
++        candidates = ("img2shape_1024", "img2shape")
++    elif basename == _TEXTURE_512_BASENAME:
++        # The locally rebuilt v1 contract uses shape2txt for the 512 texture flow.
++        candidates = ("shape2txt_512", "shape2txt") if contract == "trellis2-convrot-v1" else ("shape2txt_512",)
++    elif basename == _TEXTURE_1024_BASENAME:
++        # BitPoet's verified four-component artifact uses legacy shape2txt here.
++        candidates = ("shape2txt_1024", "shape2txt") if contract != "trellis2-convrot-v1" else ("shape2txt_1024",)
++    else:
++        raise ValueError(f"No ConvRot checkpoint mapping is defined for {basename!r}")
++    for candidate in candidates:
++        if candidate in components:
++            return candidate
++    raise KeyError(
++        f"Checkpoint {checkpoint} has no ConvRot component for {basename!r}; "
++        f"available components are {sorted(components)}"
++    )
 +
 +
 +def find_model_config(path: str) -> str:

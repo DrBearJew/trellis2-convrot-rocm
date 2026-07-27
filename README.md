@@ -8,7 +8,7 @@ This patch kit adds:
 - fused W8A8 Triton kernels tuned for measured TRELLIS shapes;
 - the published BitPoet checkpoint as a pinned, verified download;
 - one-process Mesa support for TRELLIS and ComfyUI `GLSLShader`;
-- 512 shape and texture routes;
+- checkpoint-aware 512, 1024, and 1024-cascade routing;
 - safe fallback when Triton is unavailable.
 
 Validated on an RX 7900 XTX with Python 3.12, PyTorch 2.14 ROCm 7.15, and Triton 3.8.
@@ -26,7 +26,9 @@ Observed flow execution times:
 
 A complete 512 shape-only run measured **131.67 s with Q4_K_M** and **104.04 s with INT8 ConvRot**: an observed **1.27× wall-clock improvement**.
 
-INT8 is optimized for execution speed, not model size. The three 512 INT8 components occupy 3.94 GB versus 2.37 GB for Q4_K_M, about 1.66× larger. The two measured runs also produced different mesh topology, so compare visual output for your workload rather than treating polygon count as a quality score.
+The enabled BitPoet **1024** route completed in **127.13 s** and exported a valid 30.47 MB GLB with 819,421 vertices and 1,719,392 faces.
+
+INT8 is optimized for execution speed, not model size. The three-component rebuilt INT8 checkpoint occupies 3.94 GB versus 2.37 GB for the corresponding Q4_K_M files, about 1.66× larger. The two measured runs also produced different mesh topology, so compare visual output for your workload rather than treating polygon count as a quality score.
 
 Full measurements: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
@@ -80,7 +82,7 @@ Start ComfyUI:
   --port 8188
 ```
 
-Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF` and use the 512 pipeline.
+Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF`. The BitPoet checkpoint supports 512 shape generation plus complete 1024 and 1024-cascade flow routing. The locally rebuilt three-component checkpoint supports the 512 route. A ready API example is included at [`workflows/trellis2_convrot_bitpoet_1024_shape.json`](workflows/trellis2_convrot_bitpoet_1024_shape.json).
 
 The first load downloads the normal TRELLIS support assets such as DINO, encoders, decoders, and architecture configs. It does not download duplicate BF16 flow weights.
 
@@ -103,7 +105,7 @@ See [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for the checkpoint format.
 ## Scope
 
 - RX 7900 XTX / `gfx1100`
-- 512 TRELLIS pipelines
+- 512, 1024, and 1024-cascade TRELLIS routing with the BitPoet checkpoint
 - one ComfyUI process on port 8188
 - Mesa desktop OpenGL for TRELLIS and Mesa GLES for `GLSLShader`
 - prebuilt ROCm TRELLIS extensions matching the active Python/PyTorch ABI

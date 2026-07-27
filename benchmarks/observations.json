@@ -56,6 +56,14 @@
     "geometry_quality_parity": "not established",
     "warning": "The 1.27x wall-clock observation is confounded by materially different output topology; do not present it as a controlled quality-equivalent benchmark."
   },
+  "bitpoet_1024_shape_acceptance_run": {
+    "seconds": 127.13,
+    "glb_bytes": 30466568,
+    "vertices": 819421,
+    "faces": 1719392,
+    "pipeline_type": "1024",
+    "components": ["structure_model", "img2shape"]
+  },
   "single_process_acceptance_run": {
     "seconds": 122.01,
     "glb_bytes": 28075300,

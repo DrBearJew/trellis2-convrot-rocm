@@ -94,7 +94,7 @@ mkdir -p "$COMFYUI/models/diffusion_models"
 
 The helper uses `huggingface_hub` to pin the repository revision; no floating `main` download is accepted.
 
-The verifier requires SHA256 `66d269c1f874d38fe491a413e16944ff208a4ae348e01fc3e97b5531b52a7f3f`, confirms all 4,240 tensors, and proves that the three runtime components exactly match the bundled tensor manifest. The fourth 1024 image-to-shape component is present but unreachable in the gated 512 runtime.
+The verifier requires SHA256 `66d269c1f874d38fe491a413e16944ff208a4ae348e01fc3e97b5531b52a7f3f` and confirms all 4,240 tensors. Runtime routing uses `img2shape_512` for 512 shape generation, `img2shape` for 1024 shape generation, and `shape2txt` for 1024 texturing.
 
 ### 5B. Rebuild from pinned official BF16 sources
 
@@ -168,10 +168,10 @@ In the UI:
 
 1. confirm `GLSL Shader` exists;
 2. select `INT8 ConvRot` in `Trellis2LoadModel_GGUF`;
-3. use `pipeline_type=512`;
-4. keep 1024/cascade routes disabled.
+3. use `pipeline_type=1024` or `1024_cascade` with the BitPoet checkpoint;
+4. use `pipeline_type=512` for 512 shape generation or with the locally rebuilt v1 checkpoint.
 
-On a clean `models/Trellis2` root, that first model selection acquires the normal non-flow runtime assets: `pipeline.json`, DINO, encoders/decoders, and the structure/512-shape/512-texture architecture JSON files. ConvRot replaces the three BF16 flow payloads, so those multi-gigabyte flow weights are not downloaded a second time. Background-removal assets retain the upstream node's normal lazy acquisition behavior.
+On a clean `models/Trellis2` root, that first model selection acquires the normal non-flow runtime assets: `pipeline.json`, DINO, encoders/decoders, and all 512/1024 architecture JSON files. ConvRot replaces the BF16 flow payloads, so those multi-gigabyte weights are not downloaded a second time. Background-removal assets retain the upstream node's normal lazy acquisition behavior.
 
 ## Rollback
 

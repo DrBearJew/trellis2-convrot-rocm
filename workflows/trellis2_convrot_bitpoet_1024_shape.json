@@ -1,0 +1,63 @@
+{
+  "1": {
+    "class_type": "Trellis2LoadModel_GGUF",
+    "inputs": {
+      "modelname": "TRELLIS.2-4B",
+      "model_format": "INT8 ConvRot",
+      "backend": "sdpa",
+      "device": "cuda",
+      "low_vram": true,
+      "keep_models_loaded": false
+    }
+  },
+  "2": {
+    "class_type": "Trellis2LoadImageWithTransparency_GGUF",
+    "inputs": {
+      "image": "input.png"
+    }
+  },
+  "3": {
+    "class_type": "Trellis2PreProcessImage_GGUF",
+    "inputs": {
+      "image": ["2", 0],
+      "padding": 0,
+      "remove_background": true
+    }
+  },
+  "4": {
+    "class_type": "Trellis2MeshWithVoxelGenerator_GGUF",
+    "inputs": {
+      "pipeline": ["1", 0],
+      "image": ["3", 0],
+      "seed": 271828,
+      "pipeline_type": "1024",
+      "sparse_structure_steps": 8,
+      "shape_steps": 8,
+      "texture_steps": 8,
+      "max_num_tokens": 49152,
+      "sparse_structure_resolution": 32,
+      "max_views": 1,
+      "generate_texture_slat": false,
+      "use_tiled_decoder": false,
+      "sampler": "euler"
+    }
+  },
+  "5": {
+    "class_type": "Trellis2MeshWithVoxelToTrimesh_GGUF",
+    "inputs": {
+      "mesh": ["4", 0],
+      "reorient_vertices": "90 degrees",
+      "rotate_x": 0.0,
+      "rotate_y": 0.0,
+      "rotate_z": 0.0
+    }
+  },
+  "6": {
+    "class_type": "Trellis2ExportMesh_GGUF",
+    "inputs": {
+      "trimesh": ["5", 0],
+      "filename_prefix": "3D/trellis2_convrot_1024_shape",
+      "file_format": "glb"
+    }
+  }
+}

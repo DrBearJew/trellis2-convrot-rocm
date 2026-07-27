@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused post-install checks for fallback and the 512-only invariant."""
+"""Focused post-install checks for fallback and checkpoint-aware routing."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ def main() -> None:
     sys.path[:0] = [os.fspath(args.trellis_node.resolve()), os.fspath(args.comfyui.resolve())]
     os.environ["TRELLIS2_INT8_FAST_PATH"] = os.fspath(args.int8_backend.resolve())
 
-    from trellis2_gguf.pipelines.trellis2_image_to_3d import Trellis2ImageTo3DPipeline
     from trellis2_gguf.utils import convrot_utils
 
     layer = convrot_utils.ConvRotLinear(
@@ -41,35 +40,26 @@ def main() -> None:
         convrot_utils._load_triton_backend_modules = original_loader
     assert output.shape == (1, 3) and torch.isfinite(output).all()
 
-    pipeline = object.__new__(Trellis2ImageTo3DPipeline)
-    pipeline.enable_convrot = True
-    pipeline.default_pipeline_type = "512"
-    unsupported = [
-        ("load_shape_slat_flow_model_1024", (), {}),
-        ("load_tex_slat_flow_model_1024", (), {}),
-        ("run", (None,), {"pipeline_type": "1024"}),
-        ("run_multiview", (None,), {"pipeline_type": "1024"}),
-        ("run_cascade", (None,), {}),
-        ("texture_mesh", (None, None), {}),
-        ("texture_mesh_multiview", (None, None, None, None, None), {}),
-        ("refine_mesh", (None, None), {}),
-    ]
-    for method, positional, keyword in unsupported:
-        try:
-            getattr(pipeline, method)(*positional, **keyword)
-        except ValueError as exc:
-            assert "gated to 512" in str(exc)
-        else:
-            raise AssertionError(f"{method} accepted unsupported ConvRot resolution")
-
-    try:
-        convrot_utils.checkpoint_prefix_for_path(
-            "/models/slat_flow_img2shape_dit_1_3B_1024_bf16"
-        )
-    except ValueError:
-        pass
+    checkpoint = convrot_utils.get_convrot_checkpoint()
+    components, contract = convrot_utils._checkpoint_layout(os.path.realpath(checkpoint))
+    assert convrot_utils.checkpoint_prefix_for_path(
+        "/models/ss_flow_img_dit_1_3B_64_bf16", checkpoint
+    ) == "structure_model"
+    assert convrot_utils.checkpoint_prefix_for_path(
+        "/models/slat_flow_img2shape_dit_1_3B_512_bf16", checkpoint
+    ) == "img2shape_512"
+    if contract == "trellis2-convrot-v1":
+        assert convrot_utils.checkpoint_prefix_for_path(
+            "/models/slat_flow_imgshape2tex_dit_1_3B_512_bf16", checkpoint
+        ) == "shape2txt"
     else:
-        raise AssertionError("1024 shape prefix was accepted")
+        assert {"img2shape", "shape2txt"}.issubset(components)
+        assert convrot_utils.checkpoint_prefix_for_path(
+            "/models/slat_flow_img2shape_dit_1_3B_1024_bf16", checkpoint
+        ) == "img2shape"
+        assert convrot_utils.checkpoint_prefix_for_path(
+            "/models/slat_flow_imgshape2tex_dit_1_3B_1024_bf16", checkpoint
+        ) == "shape2txt"
 
     print("native contract: PASS")
 

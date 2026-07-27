@@ -100,7 +100,8 @@ class ConvRotAcquisitionTest(unittest.TestCase):
         self.assertIn("refiner/ss_flow_img_dit_1_3B_64_bf16.json", filenames)
         self.assertIn("shape/slat_flow_img2shape_dit_1_3B_512_bf16.json", filenames)
         self.assertIn("texture/slat_flow_imgshape2tex_dit_1_3B_512_bf16.json", filenames)
-        self.assertFalse(any("_1024_" in name for name in filenames))
+        self.assertIn("shape/slat_flow_img2shape_dit_1_3B_1024_bf16.json", filenames)
+        self.assertIn("texture/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json", filenames)
         self.assertIn("decoders/Stage1/ss_dec_conv3d_16l8_fp16.safetensors", filenames)
         self.assertIn("decoders/Stage2/shape_dec_next_dc_f16c32_fp16.safetensors", filenames)
         self.assertIn("decoders/Stage2/tex_dec_next_dc_f16c32_fp16.safetensors", filenames)
@@ -109,22 +110,27 @@ class ConvRotAcquisitionTest(unittest.TestCase):
         self.assertEqual(sum(repo == self.manager.DINOV3_REPO for repo, _ in self.downloads), 3)
         self.assertIsNone(resolved["sparse_structure_flow_model"][1])
         self.assertIsNone(resolved["shape_slat_flow_model_512"][1])
+        self.assertIsNone(resolved["shape_slat_flow_model_1024"][1])
         self.assertIsNone(resolved["tex_slat_flow_model_512"][1])
+        self.assertIsNone(resolved["tex_slat_flow_model_1024"][1])
 
-    def test_convrot_rejects_non_512_resolution(self) -> None:
+    def test_resolution_hint_does_not_hide_combined_checkpoint_configs(self) -> None:
         old = os.environ.get("TRELLIS2_MODEL_RESOLUTION")
         os.environ["TRELLIS2_MODEL_RESOLUTION"] = "1024"
         try:
-            with self.assertRaisesRegex(ValueError, "512 only"):
-                self.manager.ensure_model_files(
-                    "INT8 ConvRot",
-                    {"args": {"models": PIPELINE_MODELS}},
-                )
+            resolved = self.manager.ensure_model_files(
+                "INT8 ConvRot",
+                {"args": {"models": PIPELINE_MODELS}},
+            )
         finally:
             if old is None:
                 os.environ.pop("TRELLIS2_MODEL_RESOLUTION", None)
             else:
                 os.environ["TRELLIS2_MODEL_RESOLUTION"] = old
+        self.assertIn("shape_slat_flow_model_512", resolved)
+        self.assertIn("shape_slat_flow_model_1024", resolved)
+        self.assertIn("tex_slat_flow_model_512", resolved)
+        self.assertIn("tex_slat_flow_model_1024", resolved)
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ INT8 ConvRot is a speed-oriented format, not a size reduction over Q4_K_M:
 | Structure + image-to-shape (shape-only) | 1,578,195,424 B | 2,626,141,808 B | 1.66× |
 | Structure + image-to-shape + shape-to-texture | 2,367,637,248 B | 3,939,776,576 B file | 1.66× |
 
-The ready-to-download BitPoet checkpoint is 5,253,048,192 bytes because it additionally contains the unused 1024 image-to-shape component. Runtime CPU/GPU peaks depend on component unloading and allocator behavior, but each INT8 component is also larger than its Q4_K_M counterpart. The speed observations come from fused W8A8 execution avoiding repeated Q4_K_M dequantization; they do not imply lower storage or memory use.
+The ready-to-download BitPoet checkpoint is 5,253,048,192 bytes because it contains both 512 and 1024 image-to-shape components plus the 1024 texture flow. Runtime CPU/GPU peaks depend on component unloading and allocator behavior, but each INT8 component is also larger than its Q4_K_M counterpart. The speed observations come from fused W8A8 execution avoiding repeated Q4_K_M dequantization; they do not imply lower storage or memory use.
 
 ## End-to-end observation and geometry-parity caveat
 
@@ -58,6 +58,10 @@ The recorded complete runs were:
 The observed elapsed-time ratio was `131.67 / 104.04 = 1.27×` in favor of INT8. Report that as an uncontrolled wall-clock observation, not an apples-to-apples benchmark.
 
 More importantly, the INT8 output had 15.5% fewer vertices and 13.5% fewer faces. That proves the quantized flow produced materially different sparse occupancy/topology. Polygon count alone does not establish lower visual quality, but **geometry-quality parity has not been demonstrated**. A promotion-quality comparison still needs identical input/seed/settings plus rendered-view comparison and geometry metrics (for example Chamfer distance and F-score), ideally after normalizing extraction/simplification targets.
+
+## 1024 route acceptance
+
+With the BitPoet checkpoint, the native `pipeline_type=1024` route loaded `structure_model` and the legacy-named `img2shape` 1024 component, completed in 127.13 seconds, and exported a valid 30,466,568-byte GLB with 819,421 vertices and 1,719,392 faces. The 1024 texture-flow path also loaded the `shape2txt` component and completed without a routing error.
 
 ## Single-process acceptance evidence
 
