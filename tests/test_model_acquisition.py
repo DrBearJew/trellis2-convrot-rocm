@@ -104,6 +104,8 @@ class ConvRotAcquisitionTest(unittest.TestCase):
         self.assertIn("decoders/Stage1/ss_dec_conv3d_16l8_fp16.safetensors", filenames)
         self.assertIn("decoders/Stage2/shape_dec_next_dc_f16c32_fp16.safetensors", filenames)
         self.assertIn("decoders/Stage2/tex_dec_next_dc_f16c32_fp16.safetensors", filenames)
+        self.assertIn("encoders/shape_enc_next_dc_f16c32_fp16.json", filenames)
+        self.assertIn("encoders/shape_enc_next_dc_f16c32_fp16.safetensors", filenames)
         self.assertEqual(sum(repo == self.manager.DINOV3_REPO for repo, _ in self.downloads), 3)
         self.assertIsNone(resolved["sparse_structure_flow_model"][1])
         self.assertIsNone(resolved["shape_slat_flow_model_512"][1])

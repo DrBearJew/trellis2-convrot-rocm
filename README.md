@@ -1,36 +1,47 @@
-# TRELLIS.2 ConvRot on ROCm (`gfx1100`)
+# TRELLIS.2 INT8 ConvRot for AMD ROCm
 
-A reviewable patch kit for native TRELLIS.2 INT8 ConvRot execution inside **one ComfyUI process** on AMD ROCm. Mesa supplies both TRELLIS desktop OpenGL and the core `GLSLShader` OpenGL ES context; no second ComfyUI server or proxy API is required.
+Native fused INT8 ConvRot execution for TRELLIS.2 inside a single ComfyUI process on AMD `gfx1100` GPUs.
 
-> **Validated scope:** RX 7900 XTX (`gfx1100`), Python 3.12, PyTorch 2.14 ROCm 7.15 development build, Triton 3.8, ComfyUI at the pinned revision below, and the 512 pipeline. Native ROCm geometry extensions must already be built for the same Python/PyTorch ABI. No model weights, generated assets, credentials, or machine-specific paths are included.
+This patch kit adds:
 
-## What this kit contains
+- native `ConvRotLinear` loading for TRELLIS sparse and dense flow models;
+- fused W8A8 Triton kernels tuned for measured TRELLIS shapes;
+- the published BitPoet checkpoint as a pinned, verified download;
+- one-process Mesa support for TRELLIS and ComfyUI `GLSLShader`;
+- 512 shape and texture routes;
+- safe fallback when Triton is unavailable.
 
-- Native `ConvRotLinear` construction for TRELLIS sparse and dense flow models.
-- Verifier for the published BitPoet checkpoint plus an exact-manifest three-component builder/validator.
-- Prequantized W8A8 Triton execution with opt-in measured `gfx1100` configurations.
-- Bounded, inference-safe conditioning preprocessing cache.
-- Sequential component loading for slow NTFS/FUSE-hosted checkpoints.
-- Correct eager fallback when Triton is unavailable.
-- Early 512-only guards on public, split, cascade, refine, and texture routes.
-- A small ComfyUI core patch that makes ANGLE preload optional.
-- A one-process Mesa launcher contract.
+Validated on an RX 7900 XTX with Python 3.12, PyTorch 2.14 ROCm 7.15, and Triton 3.8.
 
-## Pinned revisions and licenses
+## Results
 
-| Component | Revision | Patch license boundary |
-|---|---|---|
-| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | `c2638ce6c00e3426c48d56a775bc46e9a8464094` | GPL-3.0 |
-| [Aero-Ex/ComfyUI-Trellis2-GGUF](https://github.com/Aero-Ex/ComfyUI-Trellis2-GGUF) | `6bd11ead7ab7976ec4b2c47db52701f4c76a54e2` | MIT |
-| [patientx/ComfyUI-INT8-Fast-ROCM](https://github.com/patientx/ComfyUI-INT8-Fast-ROCM) | `5e365a2d02058a3c6d57405ae07bb99a3804c7cc` | AGPL-3.0 |
-| [BitPoet/TRELLIS.2-int8-convrot](https://huggingface.co/BitPoet/TRELLIS.2-int8-convrot) ready checkpoint | `2f7cd18627fc89c9f238e63bdd0abb5b204d13c1` | community artifact; source model terms apply |
-| [microsoft/TRELLIS.2-4B](https://huggingface.co/microsoft/TRELLIS.2-4B) source weights | `af44b45f2e35a493886929c6d786e563ec68364d` | model terms apply |
+Observed flow execution times:
 
-The root MIT license covers original glue scripts and documentation only. It does not relicense patch hunks or models. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+| Flow execution | Q4_K_M | INT8 ConvRot | Ratio |
+|---|---:|---:|---:|
+| Cold structure | 4.927 s | 1.600 s | 3.08× |
+| Cold shape | 5.802 s | 2.146 s | 2.70× |
+| Warm structure | 0.341 s | 0.243 s | 1.40× |
+| Warm shape | 0.791 s | 0.679 s | 1.16× |
+
+A complete 512 shape-only run measured **131.67 s with Q4_K_M** and **104.04 s with INT8 ConvRot**: an observed **1.27× wall-clock improvement**.
+
+INT8 is optimized for execution speed, not model size. The three 512 INT8 components occupy 3.94 GB versus 2.37 GB for Q4_K_M, about 1.66× larger. The two measured runs also produced different mesh topology, so compare visual output for your workload rather than treating polygon count as a quality score.
+
+Full measurements: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+
+## Pinned components
+
+| Component | Revision |
+|---|---|
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | `c2638ce6c00e3426c48d56a775bc46e9a8464094` |
+| [ComfyUI-Trellis2-GGUF](https://github.com/Aero-Ex/ComfyUI-Trellis2-GGUF) | `6bd11ead7ab7976ec4b2c47db52701f4c76a54e2` |
+| [ComfyUI-INT8-Fast-ROCM](https://github.com/patientx/ComfyUI-INT8-Fast-ROCM) | `5e365a2d02058a3c6d57405ae07bb99a3804c7cc` |
+| [BitPoet/TRELLIS.2-int8-convrot](https://huggingface.co/BitPoet/TRELLIS.2-int8-convrot) | `2f7cd18627fc89c9f238e63bdd0abb5b204d13c1` |
 
 ## Quick start
 
-Define every path explicitly:
+Set paths for your installation:
 
 ```bash
 export KIT="$PWD"
@@ -41,7 +52,7 @@ export TRELLIS_PYTHON="$HOME/venvs/trellis/bin/python"
 export ROCM_PYTHON_ENV="$HOME/venvs/rocm-runtime"
 ```
 
-Clone the three pinned repositories, then apply all license-separated patches:
+Clone the pinned repositories as described in [docs/INSTALL.md](docs/INSTALL.md), then apply the patches:
 
 ```bash
 ./scripts/apply-patches.sh \
@@ -50,30 +61,14 @@ Clone the three pinned repositories, then apply all license-separated patches:
   --int8-backend "$INT8_BACKEND"
 ```
 
-Choose one checkpoint path.
-
-**Fast path: download the published BitPoet artifact** (5,253,048,192 bytes; four components, of which the 512 runtime consumes three):
+Download and verify the ready-to-use BitPoet checkpoint:
 
 ```bash
 "$TRELLIS_PYTHON" scripts/verify-bitpoet-checkpoint.py \
   --download-to "$COMFYUI/models/diffusion_models"
 ```
 
-The helper pins Hugging Face revision `2f7cd18627fc89c9f238e63bdd0abb5b204d13c1`, then verifies the 5.25 GB file's SHA256 and exact runtime tensor schemas.
-
-**Reproducible-build path:** derive a smaller exact three-component checkpoint from the pinned official BF16 files:
-
-```bash
-"$TRELLIS_PYTHON" scripts/build-checkpoint.py \
-  --output "$COMFYUI/models/diffusion_models/trellis_2_int8_convrot.safetensors" \
-  --int8-backend "$INT8_BACKEND" \
-  --device cuda
-
-"$TRELLIS_PYTHON" scripts/validate-checkpoint.py \
-  "$COMFYUI/models/diffusion_models/trellis_2_int8_convrot.safetensors"
-```
-
-Start one ComfyUI server:
+Start ComfyUI:
 
 ```bash
 ./scripts/start-comfyui-native.sh \
@@ -85,53 +80,36 @@ Start one ComfyUI server:
   --port 8188
 ```
 
-Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF` and use `pipeline_type=512`. On a clean model root, the first load acquires DINO, encoder/decoder assets, and the three flow architecture JSON files. It deliberately does not download the replaced BF16 flow weights.
+Select **INT8 ConvRot** in `Trellis2LoadModel_GGUF` and use the 512 pipeline.
 
-See [docs/INSTALL.md](docs/INSTALL.md) for prerequisites, verification, and rollback.
+The first load downloads the normal TRELLIS support assets such as DINO, encoders, decoders, and architecture configs. It does not download duplicate BF16 flow weights.
 
-## Measured observations
+## Build the checkpoint yourself
 
-Single-run flow execution observations on the validated machine:
-
-| Flow execution | Q4_K_M | INT8 ConvRot | Observed ratio |
-|---|---:|---:|---:|
-| Cold structure | 4.927 s | 1.600 s | 3.08× |
-| Cold shape | 5.802 s | 2.146 s | 2.70× |
-| Warm structure | 0.341 s | 0.243 s | 1.40× |
-| Warm shape | 0.791 s | 0.679 s | 1.16× |
-
-These are profiling observations, not statistical benchmark results. The recorded end-to-end runs produced materially different mesh complexity, so this repository makes **no end-to-end speedup claim**. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-
-## Important limitations
-
-- **512 only.** Every 1024/cascade route fails early.
-- **Three runtime flow components.** The runtime consumes structure, 512 image-to-shape, and 512 shape-to-texture. The pinned BitPoet artifact also contains one unused 1024 image-to-shape component and is verified by exact file hash; locally rebuilt v1 files contain exactly the three runtime components and use the strict manifest validator.
-- **Shape-only is the completed end-to-end validation.** Mesa `GLSLShader` and native TRELLIS shape generation coexist in one process; complete textured output remains outside the promoted validation claim.
-- **No model redistribution.** The builder downloads pinned source files directly from Hugging Face and writes the derived checkpoint locally.
-- **Advanced ROCm install.** This kit does not compile CuMesh, FlexGEMM, O-Voxel, or nvdiffrast. Use an interpreter where those extensions already import.
-- Static Triton configurations are opt-in only from native TRELLIS calls; generic INT8/Krea calls retain normal autotuning.
-- On low-RAM systems, restarting ComfyUI can be safer than `/free` after loading a multi-gigabyte model because offloading may pressure swap.
-
-## Repository layout
-
-```text
-patches/    GPL, MIT, and AGPL upstream patches kept separate
-scripts/    apply/reverse, checkpoint build/validation, launcher, checks
-manifests/  exact pinned tensor/dtype/shape and provenance contract
-tests/      sparse exact-manifest and clean-root acquisition regressions
-docs/       installation, checkpoint, architecture, benchmark notes
-LICENSES/   exact upstream license copies
-```
-
-## Rollback
-
-Stop ComfyUI, then reverse all three patches atomically:
+To derive a smaller three-component checkpoint directly from the pinned Microsoft BF16 sources:
 
 ```bash
-./scripts/apply-patches.sh --reverse \
-  --comfyui "$COMFYUI" \
-  --trellis-node "$TRELLIS_NODE" \
-  --int8-backend "$INT8_BACKEND"
+"$TRELLIS_PYTHON" scripts/build-checkpoint.py \
+  --output "$COMFYUI/models/diffusion_models/trellis_2_int8_convrot.safetensors" \
+  --int8-backend "$INT8_BACKEND" \
+  --device cuda
+
+"$TRELLIS_PYTHON" scripts/validate-checkpoint.py \
+  "$COMFYUI/models/diffusion_models/trellis_2_int8_convrot.safetensors"
 ```
 
-No model files are deleted.
+See [docs/CHECKPOINT.md](docs/CHECKPOINT.md) for the checkpoint format.
+
+## Scope
+
+- RX 7900 XTX / `gfx1100`
+- 512 TRELLIS pipelines
+- one ComfyUI process on port 8188
+- Mesa desktop OpenGL for TRELLIS and Mesa GLES for `GLSLShader`
+- prebuilt ROCm TRELLIS extensions matching the active Python/PyTorch ABI
+
+## License
+
+Original scripts and documentation are MIT licensed. Patch files retain the licenses of their upstream projects: ComfyUI GPL-3.0, ComfyUI-Trellis2-GGUF MIT, and ComfyUI-INT8-Fast-ROCM AGPL-3.0. Model terms apply separately.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

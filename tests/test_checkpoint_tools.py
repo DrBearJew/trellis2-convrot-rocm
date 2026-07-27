@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib.util
 import json
+import os
 import math
 from pathlib import Path
 import shutil
@@ -14,6 +16,7 @@ from typing import Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD = ROOT / "scripts/build-checkpoint.py"
 VALIDATE = ROOT / "scripts/validate-checkpoint.py"
 MANIFEST = ROOT / "manifests/trellis2-convrot-v1.json"
 DTYPE_BYTES = {"F32": 4, "BF16": 2, "I8": 1, "U8": 1}
@@ -143,6 +146,27 @@ class CheckpointToolsTest(unittest.TestCase):
             handle.seek(8 + header_size + header[key]["data_offsets"][0])
             handle.write(b"x")
         self._assert_rejected("invalid comfy_quant JSON")
+
+
+class BackendProvenanceTest(unittest.TestCase):
+    def test_modified_convrot_is_rejected(self) -> None:
+        backend = Path(os.environ.get("TRELLIS_TEST_INT8_BACKEND", ""))
+        convrot = backend / "convrot.py"
+        if not convrot.is_file():
+            self.skipTest("set TRELLIS_TEST_INT8_BACKEND to the pinned backend checkout")
+        spec = importlib.util.spec_from_file_location("checkpoint_builder_test", BUILD)
+        assert spec and spec.loader
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        original = convrot.read_bytes()
+        try:
+            builder._verify_backend_revision(backend)
+            convrot.write_bytes(original + b"\n# provenance mutation\n")
+            with self.assertRaisesRegex(SystemExit, "differs from the pinned revision"):
+                builder._verify_backend_revision(backend)
+        finally:
+            convrot.write_bytes(original)
+        builder._verify_backend_revision(backend)
 
 
 if __name__ == "__main__":

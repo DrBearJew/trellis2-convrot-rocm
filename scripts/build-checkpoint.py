@@ -57,18 +57,30 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_backend_revision(backend: Path) -> None:
+def _git_value(backend: Path, *arguments: str) -> str:
     result = subprocess.run(
-        ["git", "-C", os.fspath(backend.resolve()), "rev-parse", "HEAD"],
+        ["git", "-C", os.fspath(backend.resolve()), *arguments],
         text=True,
         capture_output=True,
         check=False,
     )
-    revision = result.stdout.strip()
-    if result.returncode or revision != BACKEND_REVISION:
-        detail = result.stderr.strip() or revision or "not a Git checkout"
+    if result.returncode:
+        raise SystemExit(result.stderr.strip() or "INT8 backend is not a readable Git checkout")
+    return result.stdout.strip()
+
+
+def _verify_backend_revision(backend: Path) -> None:
+    revision = _git_value(backend, "rev-parse", "HEAD")
+    if revision != BACKEND_REVISION:
         raise SystemExit(
-            f"INT8 backend must be revision {BACKEND_REVISION}; found {detail}"
+            f"INT8 backend must be revision {BACKEND_REVISION}; found {revision}"
+        )
+    expected_blob = _git_value(backend, "rev-parse", f"{BACKEND_REVISION}:convrot.py")
+    actual_blob = _git_value(backend, "hash-object", "convrot.py")
+    if actual_blob != expected_blob:
+        raise SystemExit(
+            "INT8 backend convrot.py differs from the pinned revision; "
+            "refusing to stamp false provenance metadata"
         )
 
 

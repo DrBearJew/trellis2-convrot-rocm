@@ -29,7 +29,15 @@
       "warm_shape": 0.679
     }
   },
-  "end_to_end_noncomparable_runs": {
+  "model_storage_bytes": {
+    "shape_only_q4_k_m_two_files": 1578195424,
+    "shape_only_int8_two_component_payloads": 2626141808,
+    "full_512_q4_k_m_three_files": 2367637248,
+    "strict_v1_int8_three_component_file": 3939776576,
+    "bitpoet_int8_four_component_file": 5253048192,
+    "int8_to_q4_three_component_ratio": 1.664012
+  },
+  "end_to_end_uncontrolled_observation": {
     "q4_k_m": {
       "seconds": 131.67,
       "vertices": 960471,
@@ -40,7 +48,13 @@
       "vertices": 811704,
       "faces": 1710874
     },
-    "warning": "Output complexity differs materially; do not compute or publish an end-to-end speedup from these runs."
+    "observed_q4_over_int8_elapsed_ratio": 1.265571,
+    "geometry_delta_percent": {
+      "vertices": -15.488963,
+      "faces": -13.546026
+    },
+    "geometry_quality_parity": "not established",
+    "warning": "The 1.27x wall-clock observation is confounded by materially different output topology; do not present it as a controlled quality-equivalent benchmark."
   },
   "single_process_acceptance_run": {
     "seconds": 122.01,

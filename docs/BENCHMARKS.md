@@ -35,7 +35,18 @@ cross conditioning: [1, 1029, 1024]
 
 The static `gfx1100` Triton configurations cover known TRELLIS projection shapes and are opt-in from the native adapter. Unknown shapes and generic INT8 users retain autotuning.
 
-## Why no end-to-end speedup is claimed
+## Storage and model-footprint tradeoff
+
+INT8 ConvRot is a speed-oriented format, not a size reduction over Q4_K_M:
+
+| 512 flow payloads | Q4_K_M | INT8 ConvRot | INT8/Q4 |
+|---|---:|---:|---:|
+| Structure + image-to-shape (shape-only) | 1,578,195,424 B | 2,626,141,808 B | 1.66× |
+| Structure + image-to-shape + shape-to-texture | 2,367,637,248 B | 3,939,776,576 B file | 1.66× |
+
+The ready-to-download BitPoet checkpoint is 5,253,048,192 bytes because it additionally contains the unused 1024 image-to-shape component. Runtime CPU/GPU peaks depend on component unloading and allocator behavior, but each INT8 component is also larger than its Q4_K_M counterpart. The speed observations come from fused W8A8 execution avoiding repeated Q4_K_M dequantization; they do not imply lower storage or memory use.
+
+## End-to-end observation and geometry-parity caveat
 
 The recorded complete runs were:
 
@@ -44,7 +55,9 @@ The recorded complete runs were:
 | Q4_K_M | 131.67 s | 960,471 | 1,978,942 |
 | INT8 ConvRot | 104.04 s | 811,704 | 1,710,874 |
 
-The INT8 output had 15.5% fewer vertices and 13.5% fewer faces. Mesh decoding, extraction, simplification, and export dominate the full workflow, so dividing these elapsed times would confound model execution with output complexity. The earlier 1.27× label has therefore been withdrawn.
+The observed elapsed-time ratio was `131.67 / 104.04 = 1.27×` in favor of INT8. Report that as an uncontrolled wall-clock observation, not an apples-to-apples benchmark.
+
+More importantly, the INT8 output had 15.5% fewer vertices and 13.5% fewer faces. That proves the quantized flow produced materially different sparse occupancy/topology. Polygon count alone does not establish lower visual quality, but **geometry-quality parity has not been demonstrated**. A promotion-quality comparison still needs identical input/seed/settings plus rendered-view comparison and geometry metrics (for example Chamfer distance and F-score), ideally after normalizing extraction/simplification targets.
 
 ## Single-process acceptance evidence
 

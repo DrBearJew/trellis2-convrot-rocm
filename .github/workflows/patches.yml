@@ -21,9 +21,14 @@ jobs:
         run: |
           clone_for_patch() {
             local url=$1 destination=$2 revision=$3 patch=$4 patterns
+            shift 4
             patterns=$(mktemp)
             sed -n -e 's|^--- a/||p' -e 's|^+++ b/||p' "$patch" \
               | grep -v '^/dev/null$' | sort -u > "$patterns"
+            if (($#)); then
+              printf '%s\n' "$@" >> "$patterns"
+            fi
+            sort -u -o "$patterns" "$patterns"
             git clone --filter=blob:none --no-checkout "$url" "$destination"
             git -C "$destination" sparse-checkout init --no-cone
             git -C "$destination" sparse-checkout set --no-cone --stdin < "$patterns"
@@ -38,7 +43,8 @@ jobs:
             6bd11ead7ab7976ec4b2c47db52701f4c76a54e2 patches/trellis2-gguf-mit.patch
           clone_for_patch \
             https://github.com/patientx/ComfyUI-INT8-Fast-ROCM.git /tmp/backend \
-            5e365a2d02058a3c6d57405ae07bb99a3804c7cc patches/int8-fast-rocm-agpl.patch
+            5e365a2d02058a3c6d57405ae07bb99a3804c7cc patches/int8-fast-rocm-agpl.patch \
+            convrot.py
       - name: Apply pinned patches
         run: |
           scripts/apply-patches.sh \
