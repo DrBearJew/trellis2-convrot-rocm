@@ -10,6 +10,7 @@ This patch kit adds:
 - one-process Mesa support for TRELLIS and ComfyUI `GLSLShader`;
 - checkpoint-aware 512, 1024, and 1024-cascade routing;
 - ROCm-safe UV rasterization and end-to-end PBR textured GLB export;
+- bounded pre-simplification before CuMesh initialization for multi-million-face ROCm meshes;
 - safe fallback when Triton is unavailable.
 
 Validated on an RX 7900 XTX with Python 3.12, PyTorch 2.14 ROCm 7.15, and Triton 3.8.
@@ -27,7 +28,7 @@ Observed flow execution times:
 
 A complete 512 shape-only run measured **131.67 s with Q4_K_M** and **104.04 s with INT8 ConvRot**: an observed **1.27× wall-clock improvement**.
 
-The enabled BitPoet **1024 shape** route completed in **127.13 s** and exported a valid 30.47 MB GLB with 819,421 vertices and 1,719,392 faces. The complete **1024 textured** route completed in **213.95 s** and exported a 25.62 MB GLB containing UVs, one PBR material, and two embedded 2048² textures; Blender 5.1 imported the material and both texture images successfully.
+The enabled BitPoet **1024 shape** route completed in **127.13 s** and exported a valid 30.47 MB GLB with 819,421 vertices and 1,719,392 faces. The complete **1024 textured** route completed in **213.95 s** and exported a 25.62 MB GLB containing UVs, one PBR material, and two embedded 2048² textures; Blender 5.1 imported the material and both texture images successfully. A later multi-million-face input exposed a ROCm `hipMemcpy2D` failure during CuMesh initialization; the patch now pre-simplifies ROCm inputs above one million faces on CPU and passes contiguous `float32`/`int32` tensors to CuMesh.
 
 INT8 is optimized for execution speed, not model size. The three-component rebuilt INT8 checkpoint occupies 3.94 GB versus 2.37 GB for the corresponding Q4_K_M files, about 1.66× larger. The two measured runs also produced different mesh topology, so compare visual output for your workload rather than treating polygon count as a quality score.
 

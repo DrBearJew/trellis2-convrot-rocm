@@ -1352,3 +1352,46 @@ index 0000000..aa15c4a
 +
 +    mask = flat_mask.view(texture_size, texture_size)
 +    return mask, flat_positions[flat_mask]
+
+diff --git a/nodes.py b/nodes.py
+index e1dda3a..9d626e8 100644
+--- a/nodes.py
++++ b/nodes.py
+@@ -1695,9 +1754,34 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+             
+         vertices = mesh_copy.vertices
+         faces = mesh_copy.faces
+-        
+-        vertices = vertices.cuda()
+-        faces = faces.cuda()                
++
++        # hipMemcpy2D rejects very tall face buffers on this ROCm path. Complex
++        # 1024 reconstructions can exceed 3M input faces, so bound the initial
++        # CPU topology with Meshlib before handing it to CuMesh. The regular
++        # remesh/simplify stages still enforce the requested final target.
++        if torch.version.hip is not None and int(faces.shape[0]) > 1_000_000:
++            preinit_face_limit = 1_000_000
++            print(
++                f"Pre-simplifying {int(faces.shape[0])} faces to "
++                f"{preinit_face_limit} before CuMesh init",
++                flush=True,
++            )
++            simplified = MeshUtils.simplify_with_meshlib(
++                vertices.detach().cpu().numpy(),
++                faces.detach().cpu().numpy(),
++                target=preinit_face_limit,
++            )
++            if simplified is None:
++                raise RuntimeError("Meshlib pre-simplification did not return a mesh")
++            pre_vertices, pre_faces = simplified
++            vertices = torch.from_numpy(pre_vertices)
++            faces = torch.from_numpy(pre_faces)
++
++        # CuMesh's HIP io path copies tightly packed float3/int3 rows with
++        # hipMemcpy2D. TRELLIS can expose non-contiguous mesh tensor views,
++        # which make that copy fail with hipErrorInvalidValue on ROCm.
++        vertices = vertices.to(device="cuda", dtype=torch.float32).contiguous()
++        faces = faces.to(device="cuda", dtype=torch.int32).contiguous()
+         
+         # Initialize CUDA mesh handler
+         cumesh = CuMesh.CuMesh()
