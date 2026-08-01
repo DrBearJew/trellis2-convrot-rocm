@@ -2,6 +2,8 @@
 
 Native fused INT8 ConvRot execution for TRELLIS.2 inside a single ComfyUI process on AMD `gfx1100` GPUs.
 
+> **Want the installable custom node instead of a developer patch kit?** Use [`DrBearJew/ComfyUI-Trellis2-ConvRot-ROCM`](https://github.com/DrBearJew/ComfyUI-Trellis2-ConvRot-ROCM) or its [latest release](https://github.com/DrBearJew/ComfyUI-Trellis2-ConvRot-ROCM/releases/latest). It embeds the verified node changes, installs the pinned license-separated backend companion, bundles the standard and fast workflows, and provides a strict ROCm dependency check.
+
 This patch kit adds:
 
 - native `ConvRotLinear` loading for TRELLIS sparse and dense flow models;
