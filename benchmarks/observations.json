@@ -119,5 +119,62 @@
       "input_faces": 1728856,
       "cpu_presimplification_fallback_used": false
     }
+  },
+  "xatlas_cluster_20_degree_observation": {
+    "status": "two same-input same-seed single runs; not a statistical benchmark",
+    "scope": "explicit RX 7900 XTX fast UV profile; standard workflow and generic node default remain 60 degrees",
+    "common_mesh": {
+      "seed": 1212101,
+      "faces": 290836,
+      "baseline_60_degree": {
+        "comfyui_execution_seconds": 184.14,
+        "xatlas_chart_seconds": 15.45,
+        "gpu_clusters": 896,
+        "glb_vertices": 191122,
+        "glb_bytes": 16638004
+      },
+      "candidate_20_degree": {
+        "comfyui_execution_seconds": 176.20,
+        "xatlas_chart_seconds": 2.54,
+        "gpu_clusters": 7985,
+        "glb_vertices": 212952,
+        "glb_bytes": 17718220
+      },
+      "seconds_reduced": 7.94,
+      "elapsed_reduction_percent": 4.311937
+    },
+    "dense_mesh": {
+      "seed": 1212102,
+      "faces": 715240,
+      "baseline_60_degree": {
+        "comfyui_execution_seconds": 307.86,
+        "xatlas_chart_seconds": 115.0,
+        "gpu_clusters": 858,
+        "glb_vertices": 481911,
+        "glb_bytes": 27247516
+      },
+      "candidate_20_degree": {
+        "comfyui_execution_seconds": 256.32,
+        "xatlas_chart_seconds": 53.0,
+        "gpu_clusters": 8627,
+        "glb_vertices": 490292,
+        "glb_bytes": 27530232
+      },
+      "seconds_reduced": 51.54,
+      "elapsed_reduction_percent": 16.741376,
+      "face_matched_base_color_parity": {
+        "matched_faces": 715240,
+        "rgb_mae_0_to_1": 0.007868,
+        "face_rgb_mae_p95": 0.022222,
+        "faces_mae_over_0_10_percent": 0.346597
+      }
+    },
+    "geometry_checks": {
+      "all_faces_preserved": true,
+      "finite": true,
+      "winding_consistent": true,
+      "nonmanifold_edges": 0
+    },
+    "tradeoff": "More UV clusters and seam-split vertices; atlas topology is not bitwise-equivalent."
   }
 }

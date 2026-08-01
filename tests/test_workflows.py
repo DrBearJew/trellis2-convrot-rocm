@@ -82,12 +82,41 @@ class WorkflowTest(unittest.TestCase):
         self.assertFalse(payload["1"]["inputs"]["keep_models_loaded"])
         self.assertTrue(payload["4"]["inputs"]["generate_texture_slat"])
         self.assertEqual(payload["5"]["class_type"], "Trellis2TextureBake")
+        self.assertEqual(
+            payload["5"]["inputs"]["mesh_cluster_threshold_cone_half_angle_rad"],
+            60.0,
+        )
         self.assertEqual(payload["5"]["inputs"]["mesh"], ["4", 0])
         self.assertEqual(payload["5"]["inputs"]["bvh"], ["4", 1])
         self.assertFalse(payload["5"]["inputs"]["bake_on_vertices"])
         self.assertEqual(payload["6"]["inputs"]["trimesh"], ["5", 0])
         self.assertEqual(payload["7"]["inputs"]["images"], ["5", 1])
         self.assertEqual(payload["8"]["inputs"]["images"], ["5", 2])
+
+    def test_textured_fast_profile_only_changes_uv_clustering(self):
+        standard_api = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured.api.json").read_text()
+        )
+        fast_api = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured_fast.api.json").read_text()
+        )
+        angle_key = "mesh_cluster_threshold_cone_half_angle_rad"
+        self.assertEqual(standard_api["5"]["inputs"].pop(angle_key), 60.0)
+        self.assertEqual(fast_api["5"]["inputs"].pop(angle_key), 20.0)
+        self.assertEqual(fast_api, standard_api)
+
+        standard_gui = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured.workflow.json").read_text()
+        )
+        fast_gui = json.loads(
+            (WORKFLOWS / "trellis2_convrot_bitpoet_1024_textured_fast.workflow.json").read_text()
+        )
+        standard_bake = next(node for node in standard_gui["nodes"] if node["id"] == 5)
+        fast_bake = next(node for node in fast_gui["nodes"] if node["id"] == 5)
+        self.assertEqual(standard_bake["widgets_values"][0], 60.0)
+        self.assertEqual(fast_bake["widgets_values"][0], 20.0)
+        self.assertEqual(fast_bake["widgets_values"][1:], standard_bake["widgets_values"][1:])
+        self.assertIn("FAST UV (20°)", fast_bake["title"])
 
 
 if __name__ == "__main__":

@@ -81,6 +81,17 @@ A same-input, same-seed (`1212101`), same-step warm comparison was run for the c
 
 The observed reduction was 66.47 seconds (26.5%, or 1.36× baseline/candidate). Both GLBs imported as one finite, consistently wound mesh with no non-manifold edges and the same final face count. UV seam splitting and hole triangulation produced a 44-vertex difference, so bitwise topology parity is not claimed. A separate cold candidate run directly initialized and remeshed a real 1,728,856-face TRELLIS mesh without invoking the CPU pre-simplification fallback. These remain single-run observations, not a statistically controlled benchmark.
 
+## Xatlas clustering observation
+
+The explicit RX 7900 XTX **fast UV** textured profile requests a 20-degree CuMesh cone half-angle before Xatlas. The standard textured workflow and generic node default remain at the conservative 60 degrees. CuMesh creates more bounded GPU clusters, reducing Xatlas's superlinear CPU charting work.
+
+| Seed / final mesh | 60° execution / Xatlas | 20° execution / Xatlas | Overall reduction |
+|---|---:|---:|---:|
+| `1212101`, 290,836 faces | 184.14 s / 15.45 s | 176.20 s / 2.54 s | 7.94 s (4.3%) |
+| `1212102`, 715,240 faces | 307.86 s / 115 s | 256.32 s / 53 s | 51.54 s (16.7%) |
+
+All faces were preserved. Both candidate GLBs were finite, consistently wound, and had no non-manifold edges. The 20-degree route increased UV-split vertices from 191,122 to 212,952 on the smaller mesh and from 481,911 to 490,292 on the dense mesh. On the dense same-seed pair, all 715,240 faces matched exactly in 3D; baked base-color centroid samples had RGB MAE 0.0079, p95 face MAE 0.0222, and 0.35% of faces above 0.10. The atlas layout is not bitwise-equivalent, and the smaller GLB grew by about 1.08 MB.
+
 ## Reproduction status
 
 This repository publishes the checkpoint builder, exact source revision, runtime patches, traced shapes, environment, and raw observation record. It does not yet publish an automated multi-run benchmark harness. Treat all timing values as provisional observations.

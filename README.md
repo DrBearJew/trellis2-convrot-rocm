@@ -88,12 +88,13 @@ Use the dedicated **Trellis2 - Load Model (INT8 ConvRot)** node. The BitPoet che
 
 > **Naming note:** `ComfyUI-Trellis2-GGUF` is the upstream extension name. Existing `_GGUF` node IDs remain available only for compatibility, while this patch adds format-neutral aliases and a dedicated ConvRot loader. The ConvRot route loads the `.safetensors` checkpoint above; it does **not** require TRELLIS GGUF flow weights.
 
-Two ready-to-use ComfyUI graphs are included:
+Three ready-to-use ComfyUI graphs are included:
 
 - [`1024 shape-only`](workflows/trellis2_convrot_bitpoet_1024.workflow.json), with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024.api.json);
-- [`1024 textured PBR`](workflows/trellis2_convrot_bitpoet_1024_textured.workflow.json), with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024_textured.api.json).
+- [`1024 textured PBR`](workflows/trellis2_convrot_bitpoet_1024_textured.workflow.json), the quality-first 60° UV profile, with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024_textured.api.json);
+- [`1024 textured PBR — fast UV`](workflows/trellis2_convrot_bitpoet_1024_textured_fast.workflow.json), the explicit 20° profile, with a matching [`API payload`](workflows/trellis2_convrot_bitpoet_1024_textured_fast.api.json).
 
-Download either workflow, drag it onto the canvas, choose an input image, and queue it. Both use ComfyUI's standard **Load Image** node and clean ConvRot-specific node names.
+Download a workflow, drag it onto the canvas, choose an input image, and queue it. All use ComfyUI's standard **Load Image** node and clean ConvRot-specific node names. The fast UV profile reduces CPU Xatlas time but creates more UV seams, so the standard textured workflow remains the quality-first default.
 
 The first load downloads the normal TRELLIS support assets such as DINO, encoders, decoders, and architecture configs. It does not download duplicate BF16 flow weights.
 
