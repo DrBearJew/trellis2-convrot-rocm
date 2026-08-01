@@ -79,7 +79,7 @@ A same-input, same-seed (`1212101`), same-step warm comparison was run for the c
 | Conservative baseline | 250.61 s | 337,823 / 667,292 | 191,078 / 290,836 |
 | GPU-first candidate | 184.14 s | 337,823 / 667,292 | 191,122 / 290,836 |
 
-The observed reduction was 66.47 seconds (26.5%, or 1.36× baseline/candidate). Both GLBs imported as one finite, consistently wound mesh with no non-manifold edges and the same final face count. UV seam splitting and hole triangulation produced a 44-vertex difference, so bitwise topology parity is not claimed. A separate cold candidate run directly initialized and remeshed a real 1,728,856-face TRELLIS mesh without invoking the CPU pre-simplification fallback. These remain single-run observations, not a statistically controlled benchmark.
+The observed reduction was 66.47 seconds (26.5%, or 1.36× baseline/candidate). Both GLBs imported as one finite, consistently wound mesh with no non-manifold edges and the same final face count. UV seam splitting and hole triangulation produced a 44-vertex difference, so bitwise topology parity is not claimed. A separate cold candidate run directly initialized and remeshed a real 866,682-vertex / 1,728,856-face TRELLIS mesh without invoking CPU pre-simplification. A later 50/50/30-step run produced 1,051,966 vertices / 2,095,944 faces and crossed the observed 2^20 vertex-row failure boundary; the revised preflight sends only that larger class through Meshlib before the first CuMesh call. These remain single-run observations, not a statistically controlled benchmark.
 
 ## Xatlas clustering observation
 

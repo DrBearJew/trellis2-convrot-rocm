@@ -1,5 +1,7 @@
 diff --git a/model_manager.py b/model_manager.py
-index d92aa7a..d199c46 100644
+old mode 100644
+new mode 100755
+index d92aa7a124cb0fb2969eca3e5df99fbee7824c99..d199c467873a3c34f47cd73640b9c690170c03ca
 --- a/model_manager.py
 +++ b/model_manager.py
 @@ -227,6 +227,7 @@ def ensure_model_files(
@@ -66,7 +68,9 @@ index d92aa7a..d199c46 100644
          try:
              resolved[key] = resolve_local_path(basename, enable_gguf=use_gguf,
 diff --git a/nodes.py b/nodes.py
-index e1dda3a..21dc57e 100644
+old mode 100644
+new mode 100755
+index e1dda3a549a093fa5660cf58273cd8f3ed224770..4ba76c1b2c635bb134470f7353d1c33dc119622b
 --- a/nodes.py
 +++ b/nodes.py
 @@ -20,6 +20,7 @@ import hashlib
@@ -237,7 +241,7 @@ index e1dda3a..21dc57e 100644
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -1695,13 +1754,49 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1695,13 +1754,52 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
              
          vertices = mesh_copy.vertices
          faces = mesh_copy.faces
@@ -260,18 +264,17 @@ index e1dda3a..21dc57e 100644
 +            flush=True,
 +        )
 +
-         cumesh = CuMesh.CuMesh()
--        cumesh.init(vertices, faces)
-+        try:
-+            cumesh.init(vertices, faces)
-+        except RuntimeError as direct_init_error:
++        # CuMesh's ROCm input path becomes unrecoverable in-process when the
++        # vertex transfer crosses the observed 2^20-row boundary. Preflight
++        # only those meshes before the first GPU call; smaller meshes retain
++        # the faster direct GPU path.
++        rocm_vertex_row_limit = 1 << 20
++        if torch.version.hip is not None and int(vertices.shape[0]) >= rocm_vertex_row_limit:
 +            preinit_face_limit = max(int(target_face_num), 1_000_000)
-+            if torch.version.hip is None or int(faces.shape[0]) <= preinit_face_limit:
-+                raise
 +            print(
-+                f"Direct CuMesh init failed for {int(faces.shape[0])} faces "
-+                f"({direct_init_error}); falling back to CPU pre-simplification "
-+                f"at {preinit_face_limit} faces",
++                f"ROCm CuMesh preflight: {int(vertices.shape[0])} vertices cross "
++                f"the {rocm_vertex_row_limit}-row boundary; pre-simplifying "
++                f"{int(faces.shape[0])} faces to {preinit_face_limit}",
 +                flush=True,
 +            )
 +            simplified = MeshUtils.simplify_with_meshlib(
@@ -280,7 +283,7 @@ index e1dda3a..21dc57e 100644
 +                target=preinit_face_limit,
 +            )
 +            if simplified is None:
-+                raise RuntimeError("Meshlib pre-simplification did not return a mesh") from direct_init_error
++                raise RuntimeError("Meshlib pre-simplification did not return a mesh")
 +            pre_vertices, pre_faces = simplified
 +            vertices = torch.from_numpy(pre_vertices).to(
 +                device="cuda", dtype=torch.float32
@@ -288,12 +291,15 @@ index e1dda3a..21dc57e 100644
 +            faces = torch.from_numpy(pre_faces).to(
 +                device="cuda", dtype=torch.int32
 +            ).contiguous()
-+            cumesh = CuMesh.CuMesh()
-+            cumesh.init(vertices, faces)
++
+         cumesh = CuMesh.CuMesh()
+         cumesh.init(vertices, faces)
++        if torch.version.hip is not None:
++            torch.cuda.synchronize()
          print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")        
              
          pbar.update(1)
-@@ -1786,52 +1881,40 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1786,52 +1884,40 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
              pbar.update(1)
              
          if fill_holes:
@@ -378,7 +384,7 @@ index e1dda3a..21dc57e 100644
          
          # --- Branch: Bake On Vertices (skip UV unwrapping and texture creation) ---
          if bake_on_vertices:
-@@ -1983,29 +2066,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1983,29 +2069,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
          out_normals = cumesh.read_vertex_normals()[out_vmaps]        
  
          print("Sampling attributes...")
@@ -411,7 +417,7 @@ index e1dda3a..21dc57e 100644
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -3903,6 +3966,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
+@@ -3903,6 +3969,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
          return (new_mesh,)
  
  NODE_CLASS_MAPPINGS = {
@@ -424,7 +430,7 @@ index e1dda3a..21dc57e 100644
      "Trellis2LoadModel_GGUF": Trellis2_GGUFLoadModel,
      "Trellis2MeshWithVoxelGenerator_GGUF": Trellis2_GGUFMeshWithVoxelGenerator,
      "Trellis2LoadImageWithTransparency_GGUF": Trellis2_GGUFLoadImageWithTransparency,
-@@ -3952,12 +4021,18 @@ NODE_CLASS_MAPPINGS = {
+@@ -3952,12 +4024,18 @@ NODE_CLASS_MAPPINGS = {
      
  
  NODE_DISPLAY_NAME_MAPPINGS = {
@@ -448,7 +454,7 @@ index e1dda3a..21dc57e 100644
      "Trellis2PostProcessMesh_GGUF": "Trellis2 - PostProcess Mesh (using Cumesh) (GGUF)",
      "Trellis2UnWrapAndRasterizer_GGUF": "Trellis2 - UV Unwrap and Rasterize (GGUF)",
      "Trellis2MeshWithVoxelAdvancedGenerator_GGUF": "Trellis2 - Mesh With Voxel Advanced Generator (GGUF)",
-@@ -3965,7 +4040,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
+@@ -3965,7 +4043,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
      "Trellis2Remesh_GGUF": "Trellis2 - Remesh (GGUF)",
      "Trellis2MeshTexturing_GGUF": "Trellis2 - Mesh Texturing (GGUF)",
      "Trellis2LoadMesh_GGUF": "Trellis2 - Load Mesh (GGUF)",
@@ -458,7 +464,9 @@ index e1dda3a..21dc57e 100644
      "Trellis2PostProcess2_GGUF": "Trellis2 - PostProcess Mesh (using Trimesh) (GGUF)",
      "Trellis2OvoxelExportToGLB_GGUF": "Trellis2 - Ovoxel Export to GLB (GGUF)",
 diff --git a/trellis2_gguf/models/__init__.py b/trellis2_gguf/models/__init__.py
-index 2a74803..0c9c933 100644
+old mode 100644
+new mode 100755
+index 2a748039fd07941daae02dcf096c38cbaef6cfbc..0c9c93384929cd9c961cc191379342a72d2fcd38
 --- a/trellis2_gguf/models/__init__.py
 +++ b/trellis2_gguf/models/__init__.py
 @@ -151,6 +151,7 @@ def __getattr__(name):
@@ -500,7 +508,9 @@ index 2a74803..0c9c933 100644
      # ------------------------------------------------------------------ #
      # SDNQ loading: flat layout  sdnq/{name}_quantization_config.json
 diff --git a/trellis2_gguf/models/sparse_structure_flow.py b/trellis2_gguf/models/sparse_structure_flow.py
-index c2a02ab..4b02555 100644
+old mode 100644
+new mode 100755
+index c2a02ab91a08234b3706858c8e94e9f32fbe1ac1..4b0255543782b2bade30faf03c52f4749445b31a
 --- a/trellis2_gguf/models/sparse_structure_flow.py
 +++ b/trellis2_gguf/models/sparse_structure_flow.py
 @@ -4,7 +4,7 @@ import torch
@@ -554,7 +564,9 @@ index c2a02ab..4b02555 100644
          h = h.permute(0, 2, 1).view(h.shape[0], h.shape[2], *[self.resolution] * 3).contiguous()
  
 diff --git a/trellis2_gguf/models/structured_latent_flow.py b/trellis2_gguf/models/structured_latent_flow.py
-index bf33868..e300fc8 100644
+old mode 100644
+new mode 100755
+index bf338685927b1e2ab692b7733f2c0156434cd85c..e300fc86b164120fe042e4dacc08a0d34146bf07
 --- a/trellis2_gguf/models/structured_latent_flow.py
 +++ b/trellis2_gguf/models/structured_latent_flow.py
 @@ -4,7 +4,7 @@ import torch
@@ -613,7 +625,9 @@ index bf33868..e300fc8 100644
  
  class ElasticSLatFlowModel(SparseTransformerElasticMixin, SLatFlowModel):
 diff --git a/trellis2_gguf/modules/image_feature_extractor.py b/trellis2_gguf/modules/image_feature_extractor.py
-index b676330..cfd2ac3 100644
+old mode 100644
+new mode 100755
+index b676330854e2da12e91f38331d3d5d4c19a96fce..cfd2ac30006721d4738fb86dc3f727f54c92058d
 --- a/trellis2_gguf/modules/image_feature_extractor.py
 +++ b/trellis2_gguf/modules/image_feature_extractor.py
 @@ -1,8 +1,10 @@
@@ -664,7 +678,9 @@ index b676330..cfd2ac3 100644
          self.image_size = image_size
          self.transform = transforms.Compose([
 diff --git a/trellis2_gguf/modules/utils.py b/trellis2_gguf/modules/utils.py
-index f60f052..0458932 100644
+old mode 100644
+new mode 100755
+index f60f0521ac268289705c9c9a37793dd0900dab8b..04589324f72982f1472a0fdd15156db62e4ad8b1
 --- a/trellis2_gguf/modules/utils.py
 +++ b/trellis2_gguf/modules/utils.py
 @@ -1,3 +1,5 @@
@@ -720,7 +736,9 @@ index f60f052..0458932 100644
      return {
          'f16': torch.float16,
 diff --git a/trellis2_gguf/pipelines/trellis2_image_to_3d.py b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
-index f3eb7dd..90819cf 100644
+old mode 100644
+new mode 100755
+index f3eb7dd80291707a169945c54d9e1f02c2e2874b..90819cfcab74faaef19ae3f3641f4930513789f3
 --- a/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 +++ b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 @@ -285,6 +285,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
@@ -813,7 +831,9 @@ index f3eb7dd..90819cf 100644
          rast, _ = dr.rasterize(
              ctx, uvs_torch, faces_torch,
 diff --git a/trellis2_gguf/pipelines/trellis2_texturing.py b/trellis2_gguf/pipelines/trellis2_texturing.py
-index 848c3db..28ed327 100644
+old mode 100644
+new mode 100755
+index 848c3db05359712754550627d51b21bc6aa4f25e..28ed327d861f14f33e77b3691767ac152854d5a7
 --- a/trellis2_gguf/pipelines/trellis2_texturing.py
 +++ b/trellis2_gguf/pipelines/trellis2_texturing.py
 @@ -363,7 +363,7 @@ class Trellis2TexturingPipeline(Pipeline):
@@ -826,7 +846,9 @@ index 848c3db..28ed327 100644
          rast, _ = dr.rasterize(
              ctx, uvs_torch, faces_torch,
 diff --git a/trellis2_gguf/renderers/mesh_renderer.py b/trellis2_gguf/renderers/mesh_renderer.py
-index e20efc5..8164e94 100644
+old mode 100644
+new mode 100755
+index e20efc59c26fadcbd9c11cbafa2e31b78eec395c..8164e946487caeb307b364db698ee13d4a33175b
 --- a/trellis2_gguf/renderers/mesh_renderer.py
 +++ b/trellis2_gguf/renderers/mesh_renderer.py
 @@ -54,7 +54,7 @@ class MeshRenderer:
@@ -839,7 +861,9 @@ index e20efc5..8164e94 100644
          
      def render(
 diff --git a/trellis2_gguf/renderers/pbr_mesh_renderer.py b/trellis2_gguf/renderers/pbr_mesh_renderer.py
-index b3b4655..7f737fb 100644
+old mode 100644
+new mode 100755
+index b3b465532cb15ec69c651a3814cd9b42dfb3171e..7f737fb24837710d0e3cdb1f1ddd7a899c062d2f
 --- a/trellis2_gguf/renderers/pbr_mesh_renderer.py
 +++ b/trellis2_gguf/renderers/pbr_mesh_renderer.py
 @@ -206,7 +206,7 @@ class PbrMeshRenderer:
@@ -851,38 +875,9 @@ index b3b4655..7f737fb 100644
          self.device=device
          
      def render(
-diff --git a/trellis2_gguf/utils/gguf_utils.py b/trellis2_gguf/utils/gguf_utils.py
-index 5be7118..0327581 100644
---- a/trellis2_gguf/utils/gguf_utils.py
-+++ b/trellis2_gguf/utils/gguf_utils.py
-@@ -642,9 +642,21 @@ HAS_GGUF_OPS = True
- 
- if 'GGMLOps' not in globals() or GGMLOps is None:
-     class GGMLOpsFallback:
--        class Linear(torch.nn.Module):
--            def __init__(self, *args, **kwargs):
--                super().__init__()
-+        class Linear(GGMLLayer, torch.nn.Linear):
-+            """Standalone GGUF linear when ComfyUI-GGUF is not installed.
-+
-+            GGMLLayer must participate in the MRO so quantized checkpoint tensors
-+            are assigned instead of copied into full-shape Parameters.  PyTorch
-+            2.14 validates the physical compressed storage during copy_(), which
-+            otherwise reports misleading logical-shape mismatches.
-+            """
-+            def forward(self, input, *args, **kwargs):
-+                return self.forward_comfy_cast_weights(input, *args, **kwargs)
-+
-+            def forward_comfy_cast_weights(self, input, *args, **kwargs):
-+                weight, bias = self.cast_bias_weight(input)
-+                return torch.nn.functional.linear(input, weight, bias)
-+
-         class Conv2d(torch.nn.Module):
-             def __init__(self, *args, **kwargs):
-                 super().__init__()
 diff --git a/trellis2_gguf/utils/convrot_utils.py b/trellis2_gguf/utils/convrot_utils.py
 new file mode 100755
-index 0000000..69fdbe1
+index 0000000000000000000000000000000000000000..69fdbe1957ecb27c8f3425d3b0381698cb349b2c
 --- /dev/null
 +++ b/trellis2_gguf/utils/convrot_utils.py
 @@ -0,0 +1,485 @@
@@ -1371,9 +1366,40 @@ index 0000000..69fdbe1
 +    model._cache_condition_casts = True
 +    logger.info("Loaded %s with %d ConvRot linears", component_prefix, replaced)
 +    return model
+diff --git a/trellis2_gguf/utils/gguf_utils.py b/trellis2_gguf/utils/gguf_utils.py
+old mode 100644
+new mode 100755
+index 5be71181022028166b245b32011968b07fab614f..03275815553f1846d30a392f3af40b977022c093
+--- a/trellis2_gguf/utils/gguf_utils.py
++++ b/trellis2_gguf/utils/gguf_utils.py
+@@ -642,9 +642,21 @@ HAS_GGUF_OPS = True
+ 
+ if 'GGMLOps' not in globals() or GGMLOps is None:
+     class GGMLOpsFallback:
+-        class Linear(torch.nn.Module):
+-            def __init__(self, *args, **kwargs):
+-                super().__init__()
++        class Linear(GGMLLayer, torch.nn.Linear):
++            """Standalone GGUF linear when ComfyUI-GGUF is not installed.
++
++            GGMLLayer must participate in the MRO so quantized checkpoint tensors
++            are assigned instead of copied into full-shape Parameters.  PyTorch
++            2.14 validates the physical compressed storage during copy_(), which
++            otherwise reports misleading logical-shape mismatches.
++            """
++            def forward(self, input, *args, **kwargs):
++                return self.forward_comfy_cast_weights(input, *args, **kwargs)
++
++            def forward_comfy_cast_weights(self, input, *args, **kwargs):
++                weight, bias = self.cast_bias_weight(input)
++                return torch.nn.functional.linear(input, weight, bias)
++
+         class Conv2d(torch.nn.Module):
+             def __init__(self, *args, **kwargs):
+                 super().__init__()
 diff --git a/trellis2_gguf/utils/uv_rasterizer.py b/trellis2_gguf/utils/uv_rasterizer.py
 new file mode 100755
-index 0000000..aa15c4a
+index 0000000000000000000000000000000000000000..aa15c4a3516a61ae5f01d103fcab9dbf664fc813
 --- /dev/null
 +++ b/trellis2_gguf/utils/uv_rasterizer.py
 @@ -0,0 +1,116 @@

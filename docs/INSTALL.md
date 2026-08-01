@@ -172,7 +172,7 @@ In the UI:
 4. use `pipeline_type=512` for 512 shape generation or with the locally rebuilt v1 checkpoint;
 5. for textured output, keep `generate_texture_slat=true` and connect both the mesh and BVH outputs to **Trellis2 - Postprocess and Texture Bake** before exporting the GLB.
 
-On ROCm, the postprocess node pre-simplifies inputs above one million faces with Meshlib before CuMesh initialization. This bounds the tall face-buffer transfer that can otherwise fail with `hipMemcpy2D: invalid argument`; the normal remesh and simplify stages still apply afterward. The CuMesh inputs are normalized to contiguous `float32` vertices and `int32` faces. CUDA retains its original no-pre-simplification path.
+On ROCm, the postprocess node keeps smaller meshes GPU-first but pre-simplifies inputs at or above the observed 2^20 vertex-row boundary with Meshlib before the first CuMesh call. This prevents an unrecoverable-in-process `hipMemcpy2D: invalid argument` while preserving the fast path for the measured 866,682-vertex / 1,728,856-face input. The normal remesh and simplify stages still apply afterward, and CuMesh inputs are normalized to contiguous `float32` vertices and `int32` faces. CUDA retains its original no-pre-simplification path.
 
 The upstream extension directory retains `GGUF`, and its original `_GGUF` class IDs remain registered for compatibility with existing workflows. This patch adds clean aliases and a dedicated ConvRot loader for new workflows. The ConvRot route loads `trellis_2_int8_convrot.safetensors` and does not require TRELLIS GGUF flow weights. The included GUI workflows also use ComfyUI's standard **Load Image** node.
 
