@@ -10,10 +10,18 @@ This patch kit adds:
 - one-process Mesa support for TRELLIS and ComfyUI `GLSLShader`;
 - checkpoint-aware 512, 1024, and 1024-cascade routing;
 - ROCm-safe UV rasterization and end-to-end PBR textured GLB export;
-- bounded pre-simplification before CuMesh initialization for multi-million-face ROCm meshes;
+- GPU-first CuMesh processing with a bounded ROCm safety preflight;
 - safe fallback when Triton is unavailable.
 
 Validated on an RX 7900 XTX with Python 3.12, PyTorch 2.14 ROCm 7.15, and Triton 3.8.
+
+## Latest improvements and bug fixes
+
+- **GPU-first generation:** sampling stages now run with `low_vram=false`, avoiding CPU offload during active generation while still unloading models between major stages with `keep_models_loaded=false`. GPU CuMesh initialization and hole filling replace the former unconditional CPU geometry path.
+- **Faster optional UV profile:** the new explicit [fast textured workflow](workflows/trellis2_convrot_bitpoet_1024_textured_fast.workflow.json) uses 20° pre-clustering to reduce CPU Xatlas time. The original 60° workflow remains the quality-first default because the fast profile creates more UV seams.
+- **ROCm CuMesh crash fix:** meshes at or above the observed `2^20` vertex-row boundary are pre-simplified before the first CuMesh call, preventing the unrecoverable `hipMemcpy2D: invalid argument` failure while leaving smaller meshes on the direct GPU path. A 1,051,966-vertex / 2,095,944-face validation completed successfully through this preflight.
+- **Reproducible patch coverage:** the published patch now includes the ConvRot loader, ROCm UV rasterizer, GPU-first geometry changes, and the CuMesh boundary fix; clean application and the full 21-test suite pass.
+- **Experimental native IU4 probe:** [`experiments/gfx1100-iu4`](experiments/gfx1100-iu4) provides an isolated `gfx1100` W4A4 WMMA correctness and assembly harness. It is not enabled in the TRELLIS runtime or presented as a production speed path.
 
 ## Results
 
