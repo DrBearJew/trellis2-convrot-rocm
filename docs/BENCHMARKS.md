@@ -70,6 +70,17 @@ The complete textured route additionally loaded `shape2txt`, decoded the PBR vox
 
 A later one-process acceptance sequence ran Krea, native TRELLIS, Mesa `GLSLShader`, then Krea again. Its TRELLIS stage completed in 122.01 seconds and produced a 28,075,300-byte GLB with 766,481 vertices and 1,573,060 faces. This demonstrates integration, not comparative performance.
 
+## RX 7900 XTX GPU-first 1024 observation
+
+A same-input, same-seed (`1212101`), same-step warm comparison was run for the complete 1024 textured route. The baseline used `low_vram=true` and Meshlib CPU hole filling; the candidate used `low_vram=false`, kept `keep_models_loaded=false`, initialized CuMesh directly on the full contiguous GPU mesh, and used CuMesh GPU hole filling with CPU fallbacks retained.
+
+| Route | Time | Generated vertices/faces before bake | Final GLB vertices/faces |
+|---|---:|---:|---:|
+| Conservative baseline | 250.61 s | 337,823 / 667,292 | 191,078 / 290,836 |
+| GPU-first candidate | 184.14 s | 337,823 / 667,292 | 191,122 / 290,836 |
+
+The observed reduction was 66.47 seconds (26.5%, or 1.36× baseline/candidate). Both GLBs imported as one finite, consistently wound mesh with no non-manifold edges and the same final face count. UV seam splitting and hole triangulation produced a 44-vertex difference, so bitwise topology parity is not claimed. A separate cold candidate run directly initialized and remeshed a real 1,728,856-face TRELLIS mesh without invoking the CPU pre-simplification fallback. These remain single-run observations, not a statistically controlled benchmark.
+
 ## Reproduction status
 
 This repository publishes the checkpoint builder, exact source revision, runtime patches, traced shapes, environment, and raw observation record. It does not yet publish an automated multi-run benchmark harness. Treat all timing values as provisional observations.

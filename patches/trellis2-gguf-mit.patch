@@ -66,7 +66,7 @@ index d92aa7a..d199c46 100644
          try:
              resolved[key] = resolve_local_path(basename, enable_gguf=use_gguf,
 diff --git a/nodes.py b/nodes.py
-index e1dda3a..2524973 100644
+index e1dda3a..21dc57e 100644
 --- a/nodes.py
 +++ b/nodes.py
 @@ -20,6 +20,7 @@ import hashlib
@@ -237,7 +237,148 @@ index e1dda3a..2524973 100644
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -1983,29 +2042,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1695,13 +1754,49 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+             
+         vertices = mesh_copy.vertices
+         faces = mesh_copy.faces
+-        
+-        vertices = vertices.cuda()
+-        faces = faces.cuda()                
+-        
+-        # Initialize CUDA mesh handler
++
++        # CuMesh's HIP io path expects tightly packed float3/int3 rows. Try the
++        # full generated mesh on GPU first; only use the slower CPU reduction if
++        # ROCm rejects a genuinely large input.
++        vertices = vertices.to(device="cuda", dtype=torch.float32).contiguous()
++        faces = faces.to(device="cuda", dtype=torch.int32).contiguous()
++        print(
++            f"CuMesh init tensors: vertices={tuple(vertices.shape)} {vertices.dtype} "
++            f"stride={vertices.stride()} contiguous={vertices.is_contiguous()}; "
++            f"faces={tuple(faces.shape)} {faces.dtype} stride={faces.stride()} "
++            f"contiguous={faces.is_contiguous()}",
++            flush=True,
++        )
++
+         cumesh = CuMesh.CuMesh()
+-        cumesh.init(vertices, faces)
++        try:
++            cumesh.init(vertices, faces)
++        except RuntimeError as direct_init_error:
++            preinit_face_limit = max(int(target_face_num), 1_000_000)
++            if torch.version.hip is None or int(faces.shape[0]) <= preinit_face_limit:
++                raise
++            print(
++                f"Direct CuMesh init failed for {int(faces.shape[0])} faces "
++                f"({direct_init_error}); falling back to CPU pre-simplification "
++                f"at {preinit_face_limit} faces",
++                flush=True,
++            )
++            simplified = MeshUtils.simplify_with_meshlib(
++                vertices.detach().cpu().numpy(),
++                faces.detach().cpu().numpy(),
++                target=preinit_face_limit,
++            )
++            if simplified is None:
++                raise RuntimeError("Meshlib pre-simplification did not return a mesh") from direct_init_error
++            pre_vertices, pre_faces = simplified
++            vertices = torch.from_numpy(pre_vertices).to(
++                device="cuda", dtype=torch.float32
++            ).contiguous()
++            faces = torch.from_numpy(pre_faces).to(
++                device="cuda", dtype=torch.int32
++            ).contiguous()
++            cumesh = CuMesh.CuMesh()
++            cumesh.init(vertices, faces)
+         print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")        
+             
+         pbar.update(1)
+@@ -1786,52 +1881,40 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+             pbar.update(1)
+             
+         if fill_holes:
+-            new_vertices, new_faces = cumesh.read()
+-            meshlib_mesh = mrmeshnumpy.meshFromFacesVerts(new_faces.detach().clone().cpu().numpy(), new_vertices.detach().clone().cpu().numpy())
+-            hole_edges = meshlib_mesh.topology.findHoleRepresentiveEdges()
+-            holes_filled = 0
+-            
+-            nb_holes = len(hole_edges)
+-            print(f"{nb_holes} holes found")
+-
+-            if nb_holes > 0:
+-                progress_bar = tqdm(total=nb_holes, desc="Filling holes")
+-                
+-                last_reported_percent = -1  # Initialize at -1 to ensure 0% triggers an update
+-                
+-                for i, e in enumerate(hole_edges):
++            try:
++                print("Filling all finite boundary loops with CuMesh on GPU...")
++                cumesh.fill_holes(max_hole_perimeter=float("inf"))
++            except RuntimeError as gpu_fill_error:
++                print(
++                    f"CuMesh hole filling failed ({gpu_fill_error}); "
++                    "falling back to Meshlib on CPU",
++                    flush=True,
++                )
++                new_vertices, new_faces = cumesh.read()
++                meshlib_mesh = mrmeshnumpy.meshFromFacesVerts(
++                    new_faces.detach().cpu().numpy(),
++                    new_vertices.detach().cpu().numpy(),
++                )
++                hole_edges = meshlib_mesh.topology.findHoleRepresentiveEdges()
++                for edge in hole_edges:
+                     params = mrmeshpy.FillHoleParams()
+                     params.metric = mrmeshpy.getUniversalMetric(meshlib_mesh)
+-                    mrmeshpy.fillHole(meshlib_mesh, e, params)
+-                    
+-                    # Calculate current progress
+-                    current_step = i + 1
+-                    current_percent = int((current_step / nb_holes) * 100)
+-                    
+-                    # Only update the UI if the percentage has moved up
+-                    if current_percent > last_reported_percent:
+-                        # Calculate how many holes have been filled since the last UI update
+-                        # This handles cases where 1% might represent multiple holes
+-                        if last_reported_percent == -1:
+-                            # First update
+-                            progress_bar.update(current_step)
+-                        else:
+-                            # Update by the difference since the last check
+-                            last_step = int((last_reported_percent * nb_holes) / 100)
+-                            diff = current_step - last_step
+-                            progress_bar.update(diff)
+-                        
+-                        last_reported_percent = current_percent
+-                            
+-                progress_bar.close()                 
+-            
+-            new_vertices = mrmeshnumpy.getNumpyVerts(meshlib_mesh)
+-            new_faces = mrmeshnumpy.getNumpyFaces(meshlib_mesh.topology)
+-
+-            del meshlib_mesh
+-            gc.collect()
+-            
+-            cumesh.init(torch.from_numpy(new_vertices).float().to(coords.device), torch.from_numpy(new_faces).int().to(coords.device))
++                    mrmeshpy.fillHole(meshlib_mesh, edge, params)
++
++                new_vertices = mrmeshnumpy.getNumpyVerts(meshlib_mesh)
++                new_faces = mrmeshnumpy.getNumpyFaces(meshlib_mesh.topology)
++                del meshlib_mesh
++                gc.collect()
++
++                cumesh = CuMesh.CuMesh()
++                cumesh.init(
++                    torch.from_numpy(new_vertices).to(
++                        device="cuda", dtype=torch.float32
++                    ).contiguous(),
++                    torch.from_numpy(new_faces).to(
++                        device="cuda", dtype=torch.int32
++                    ).contiguous(),
++                )
+         
+         # --- Branch: Bake On Vertices (skip UV unwrapping and texture creation) ---
+         if bake_on_vertices:
+@@ -1983,29 +2066,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
          out_normals = cumesh.read_vertex_normals()[out_vmaps]        
  
          print("Sampling attributes...")
@@ -270,7 +411,7 @@ index e1dda3a..2524973 100644
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -3903,6 +3942,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
+@@ -3903,6 +3966,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
          return (new_mesh,)
  
  NODE_CLASS_MAPPINGS = {
@@ -283,7 +424,7 @@ index e1dda3a..2524973 100644
      "Trellis2LoadModel_GGUF": Trellis2_GGUFLoadModel,
      "Trellis2MeshWithVoxelGenerator_GGUF": Trellis2_GGUFMeshWithVoxelGenerator,
      "Trellis2LoadImageWithTransparency_GGUF": Trellis2_GGUFLoadImageWithTransparency,
-@@ -3952,12 +3997,18 @@ NODE_CLASS_MAPPINGS = {
+@@ -3952,12 +4021,18 @@ NODE_CLASS_MAPPINGS = {
      
  
  NODE_DISPLAY_NAME_MAPPINGS = {
@@ -307,7 +448,7 @@ index e1dda3a..2524973 100644
      "Trellis2PostProcessMesh_GGUF": "Trellis2 - PostProcess Mesh (using Cumesh) (GGUF)",
      "Trellis2UnWrapAndRasterizer_GGUF": "Trellis2 - UV Unwrap and Rasterize (GGUF)",
      "Trellis2MeshWithVoxelAdvancedGenerator_GGUF": "Trellis2 - Mesh With Voxel Advanced Generator (GGUF)",
-@@ -3965,7 +4016,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
+@@ -3965,7 +4040,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
      "Trellis2Remesh_GGUF": "Trellis2 - Remesh (GGUF)",
      "Trellis2MeshTexturing_GGUF": "Trellis2 - Mesh Texturing (GGUF)",
      "Trellis2LoadMesh_GGUF": "Trellis2 - Load Mesh (GGUF)",
@@ -710,8 +851,37 @@ index b3b4655..7f737fb 100644
          self.device=device
          
      def render(
+diff --git a/trellis2_gguf/utils/gguf_utils.py b/trellis2_gguf/utils/gguf_utils.py
+index 5be7118..0327581 100644
+--- a/trellis2_gguf/utils/gguf_utils.py
++++ b/trellis2_gguf/utils/gguf_utils.py
+@@ -642,9 +642,21 @@ HAS_GGUF_OPS = True
+ 
+ if 'GGMLOps' not in globals() or GGMLOps is None:
+     class GGMLOpsFallback:
+-        class Linear(torch.nn.Module):
+-            def __init__(self, *args, **kwargs):
+-                super().__init__()
++        class Linear(GGMLLayer, torch.nn.Linear):
++            """Standalone GGUF linear when ComfyUI-GGUF is not installed.
++
++            GGMLLayer must participate in the MRO so quantized checkpoint tensors
++            are assigned instead of copied into full-shape Parameters.  PyTorch
++            2.14 validates the physical compressed storage during copy_(), which
++            otherwise reports misleading logical-shape mismatches.
++            """
++            def forward(self, input, *args, **kwargs):
++                return self.forward_comfy_cast_weights(input, *args, **kwargs)
++
++            def forward_comfy_cast_weights(self, input, *args, **kwargs):
++                weight, bias = self.cast_bias_weight(input)
++                return torch.nn.functional.linear(input, weight, bias)
++
+         class Conv2d(torch.nn.Module):
+             def __init__(self, *args, **kwargs):
+                 super().__init__()
 diff --git a/trellis2_gguf/utils/convrot_utils.py b/trellis2_gguf/utils/convrot_utils.py
-new file mode 100644
+new file mode 100755
 index 0000000..69fdbe1
 --- /dev/null
 +++ b/trellis2_gguf/utils/convrot_utils.py
@@ -1201,37 +1371,8 @@ index 0000000..69fdbe1
 +    model._cache_condition_casts = True
 +    logger.info("Loaded %s with %d ConvRot linears", component_prefix, replaced)
 +    return model
-diff --git a/trellis2_gguf/utils/gguf_utils.py b/trellis2_gguf/utils/gguf_utils.py
-index 5be7118..0327581 100644
---- a/trellis2_gguf/utils/gguf_utils.py
-+++ b/trellis2_gguf/utils/gguf_utils.py
-@@ -642,9 +642,21 @@ HAS_GGUF_OPS = True
- 
- if 'GGMLOps' not in globals() or GGMLOps is None:
-     class GGMLOpsFallback:
--        class Linear(torch.nn.Module):
--            def __init__(self, *args, **kwargs):
--                super().__init__()
-+        class Linear(GGMLLayer, torch.nn.Linear):
-+            """Standalone GGUF linear when ComfyUI-GGUF is not installed.
-+
-+            GGMLLayer must participate in the MRO so quantized checkpoint tensors
-+            are assigned instead of copied into full-shape Parameters.  PyTorch
-+            2.14 validates the physical compressed storage during copy_(), which
-+            otherwise reports misleading logical-shape mismatches.
-+            """
-+            def forward(self, input, *args, **kwargs):
-+                return self.forward_comfy_cast_weights(input, *args, **kwargs)
-+
-+            def forward_comfy_cast_weights(self, input, *args, **kwargs):
-+                weight, bias = self.cast_bias_weight(input)
-+                return torch.nn.functional.linear(input, weight, bias)
-+
-         class Conv2d(torch.nn.Module):
-             def __init__(self, *args, **kwargs):
-                 super().__init__()
 diff --git a/trellis2_gguf/utils/uv_rasterizer.py b/trellis2_gguf/utils/uv_rasterizer.py
-new file mode 100644
+new file mode 100755
 index 0000000..aa15c4a
 --- /dev/null
 +++ b/trellis2_gguf/utils/uv_rasterizer.py
@@ -1352,46 +1493,3 @@ index 0000000..aa15c4a
 +
 +    mask = flat_mask.view(texture_size, texture_size)
 +    return mask, flat_positions[flat_mask]
-
-diff --git a/nodes.py b/nodes.py
-index e1dda3a..9d626e8 100644
---- a/nodes.py
-+++ b/nodes.py
-@@ -1695,9 +1754,34 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
-             
-         vertices = mesh_copy.vertices
-         faces = mesh_copy.faces
--        
--        vertices = vertices.cuda()
--        faces = faces.cuda()                
-+
-+        # hipMemcpy2D rejects very tall face buffers on this ROCm path. Complex
-+        # 1024 reconstructions can exceed 3M input faces, so bound the initial
-+        # CPU topology with Meshlib before handing it to CuMesh. The regular
-+        # remesh/simplify stages still enforce the requested final target.
-+        if torch.version.hip is not None and int(faces.shape[0]) > 1_000_000:
-+            preinit_face_limit = 1_000_000
-+            print(
-+                f"Pre-simplifying {int(faces.shape[0])} faces to "
-+                f"{preinit_face_limit} before CuMesh init",
-+                flush=True,
-+            )
-+            simplified = MeshUtils.simplify_with_meshlib(
-+                vertices.detach().cpu().numpy(),
-+                faces.detach().cpu().numpy(),
-+                target=preinit_face_limit,
-+            )
-+            if simplified is None:
-+                raise RuntimeError("Meshlib pre-simplification did not return a mesh")
-+            pre_vertices, pre_faces = simplified
-+            vertices = torch.from_numpy(pre_vertices)
-+            faces = torch.from_numpy(pre_faces)
-+
-+        # CuMesh's HIP io path copies tightly packed float3/int3 rows with
-+        # hipMemcpy2D. TRELLIS can expose non-contiguous mesh tensor views,
-+        # which make that copy fail with hipErrorInvalidValue on ROCm.
-+        vertices = vertices.to(device="cuda", dtype=torch.float32).contiguous()
-+        faces = faces.to(device="cuda", dtype=torch.int32).contiguous()
-         
-         # Initialize CUDA mesh handler
-         cumesh = CuMesh.CuMesh()

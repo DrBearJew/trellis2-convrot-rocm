@@ -18,7 +18,7 @@
         {"name": "pipeline", "type": "TRELLIS2PIPELINE", "links": [1]}
       ],
       "properties": {"Node name for S&R": "Trellis2LoadModel_ConvRot"},
-      "widgets_values": ["TRELLIS.2-4B", "INT8 ConvRot", "sdpa", "cuda", true, false]
+      "widgets_values": ["TRELLIS.2-4B", "INT8 ConvRot", "sdpa", "cuda", false, false]
     },
     {
       "id": 2,

@@ -83,5 +83,41 @@
     "vertices": 766481,
     "faces": 1573060,
     "sequence": "Krea -> native TRELLIS -> Mesa GLSLShader -> Krea"
+  },
+  "rx7900xtx_gpu_first_1024_textured_observation": {
+    "status": "same-input same-seed single warm run; not a statistical benchmark",
+    "seed": 1212101,
+    "steps_per_stage": 8,
+    "generated_mesh_before_bake": {
+      "vertices": 337823,
+      "faces": 667292
+    },
+    "baseline": {
+      "seconds": 250.61,
+      "low_vram": true,
+      "hole_filling": "Meshlib CPU",
+      "glb_bytes": 16652752,
+      "glb_vertices": 191078,
+      "glb_faces": 290836
+    },
+    "gpu_first": {
+      "seconds": 184.14,
+      "low_vram": false,
+      "keep_models_loaded": false,
+      "initialization": "direct contiguous CuMesh GPU with bounded CPU fallback",
+      "hole_filling": "CuMesh GPU with bounded Meshlib CPU fallback",
+      "glb_bytes": 16638004,
+      "glb_vertices": 191122,
+      "glb_faces": 290836
+    },
+    "seconds_reduced": 66.47,
+    "elapsed_reduction_percent": 26.523283,
+    "baseline_over_gpu_first_ratio": 1.360975,
+    "topology_note": "Final face count matched; UV seam splitting and hole triangulation differed by 44 vertices, so bitwise parity is not claimed.",
+    "cold_large_mesh_acceptance": {
+      "input_vertices": 866682,
+      "input_faces": 1728856,
+      "cpu_presimplification_fallback_used": false
+    }
   }
 }

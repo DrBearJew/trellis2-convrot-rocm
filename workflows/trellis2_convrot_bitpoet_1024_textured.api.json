@@ -6,7 +6,7 @@
       "model_format": "INT8 ConvRot",
       "backend": "sdpa",
       "device": "cuda",
-      "low_vram": true,
+      "low_vram": false,
       "keep_models_loaded": false
     }
   },
