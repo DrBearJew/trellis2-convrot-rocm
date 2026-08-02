@@ -76,7 +76,7 @@
         {"name": "metallic_roughness_texture", "type": "IMAGE", "links": [8]}
       ],
       "properties": {"Node name for S&R": "Trellis2TextureBake"},
-      "widgets_values": [60.0, 0, 1, 1, 2048, true, 1.0, 0.0, 1000000, "Cumesh", true, "OPAQUE", "512", true, false, false, false, "Xatlas", false]
+      "widgets_values": [60.0, 0, 1, 1, 2048, true, 1.0, 0.0, 1000000, "Cumesh", true, "OPAQUE", "512", true, false, false, true, "Xatlas", false]
     },
     {
       "id": 6,

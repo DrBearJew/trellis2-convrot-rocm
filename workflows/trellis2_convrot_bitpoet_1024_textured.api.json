@@ -60,7 +60,7 @@
       "double_side_material": true,
       "remove_floaters": false,
       "bake_on_vertices": false,
-      "use_custom_normals": false,
+      "use_custom_normals": true,
       "uv_unwrap_method": "Xatlas",
       "bvh": ["4", 1],
       "remove_inner_faces": false

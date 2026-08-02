@@ -2,6 +2,7 @@ import importlib.util
 import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
 
@@ -40,6 +41,36 @@ class UVRasterizerTest(unittest.TestCase):
         ), dim=-1).reshape(-1, 2)
         torch.testing.assert_close(positions[:, :2], expected)
         torch.testing.assert_close(positions[:, 2], torch.zeros(64))
+
+    def test_large_triangle_candidate_allocation_is_bounded(self):
+        vertices = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ])
+        uvs = vertices[:, :2].clone()
+        faces = torch.tensor([[0, 1, 2]], dtype=torch.int32)
+        original_arange = torch.arange
+        candidate_lengths = []
+
+        def tracked_arange(start, end=None, *args, **kwargs):
+            if end is not None:
+                candidate_lengths.append(end - start)
+            return original_arange(start, end, *args, **kwargs)
+
+        with mock.patch.object(self.module.torch, "arange", side_effect=tracked_arange):
+            mask, _ = self.module.rasterize_uv_positions(
+                vertices,
+                faces,
+                uvs,
+                64,
+                face_chunk_size=1,
+                candidate_chunk_size=257,
+            )
+
+        self.assertTrue(mask.any())
+        self.assertGreater(len(candidate_lengths), 1)
+        self.assertLessEqual(max(candidate_lengths), 257)
 
     def test_degenerate_triangle_has_no_coverage(self):
         vertices = torch.zeros((3, 3))

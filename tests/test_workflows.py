@@ -66,7 +66,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(nodes[5]["widgets_values"], [
             60.0, 0, 1, 1, 2048, True, 1.0, 0.0, 1000000,
             "Cumesh", True, "OPAQUE", "512", True, False, False,
-            False, "Xatlas", False,
+            True, "Xatlas", False,
         ])
         self.assertEqual(nodes[5]["inputs"][0]["type"], "MESHWITHVOXEL")
         self.assertEqual(nodes[5]["inputs"][1]["type"], "BVH")
@@ -89,6 +89,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(payload["5"]["inputs"]["mesh"], ["4", 0])
         self.assertEqual(payload["5"]["inputs"]["bvh"], ["4", 1])
         self.assertFalse(payload["5"]["inputs"]["bake_on_vertices"])
+        self.assertTrue(payload["5"]["inputs"]["use_custom_normals"])
         self.assertEqual(payload["6"]["inputs"]["trimesh"], ["5", 0])
         self.assertEqual(payload["7"]["inputs"]["images"], ["5", 1])
         self.assertEqual(payload["8"]["inputs"]["images"], ["5", 2])
