@@ -82,6 +82,16 @@ class TrellisPatchContractTest(unittest.TestCase):
         )
         self.assertIn("z_proj = torch.cat([z_proj_lr, z_proj_hr], dim=-1)", added)
 
+    def test_image_batches_are_not_silently_truncated(self) -> None:
+        patch = TRELLIS_PATCH.read_text()
+        added = "\n".join(
+            line[1:]
+            for line in patch.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        self.assertIn("refusing to silently discard views", added)
+        self.assertNotIn("n = min(b, int(max_views))", added)
+
     def test_rocm_uv_rasterizer_bounds_pixel_candidates(self) -> None:
         patch = TRELLIS_PATCH.read_text()
         added = "\n".join(

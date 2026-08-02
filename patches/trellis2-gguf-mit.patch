@@ -1,3 +1,28 @@
+diff --git a/__init__.py b/__init__.py
+old mode 100644
+new mode 100755
+index 2181302daca65201228cfdd0b5512d31c3b200d2..53e907910efeb701c194f0a24c05dcd8239b6f32
+--- a/__init__.py
++++ b/__init__.py
+@@ -127,6 +127,18 @@ try:
+         mesh_scale=1.0,
+         grid_resolution_override=None,
+     ):
++        views = (
++            int(image.shape[0])
++            if isinstance(image, torch.Tensor)
++            else len(image)
++            if isinstance(image, (list, tuple))
++            else 1
++        )
++        if views != 1:
++            raise ValueError(
++                "Projected Pixel3D conditioning currently supports exactly one view; "
++                f"received {views}. Use a non-projected multi-view pipeline instead."
++            )
+         device = self.device
+         if camera_angle_x is None:
+             cam_angle = self.get_moge_camera_config(image)
 diff --git a/model_manager.py b/model_manager.py
 old mode 100644
 new mode 100755
@@ -70,10 +95,16 @@ index d92aa7a124cb0fb2969eca3e5df99fbee7824c99..d199c467873a3c34f47cd73640b9c690
 diff --git a/nodes.py b/nodes.py
 old mode 100644
 new mode 100755
-index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2bb677ebd
+index e1dda3a549a093fa5660cf58273cd8f3ed224770..f700a3c21653550fe64de6ee7357c23255e0f8f4
 --- a/nodes.py
 +++ b/nodes.py
-@@ -20,6 +20,7 @@ import hashlib
+@@ -1,4 +1,5 @@
+ import os
++import math
+ import torch
+ import torchvision.transforms as transforms
+ import psutil
+@@ -20,6 +21,7 @@ import hashlib
  import cv2
  import gc
  import copy
@@ -81,7 +112,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  class TolerantList(list):
      def __contains__(self, item):
          if super().__contains__(item):
-@@ -54,6 +55,7 @@ import comfy.utils
+@@ -54,6 +56,7 @@ import comfy.utils
  from .trellis2_gguf.pipelines import Trellis2ImageTo3DPipeline
  from .trellis2_gguf.representations import Mesh, MeshWithVoxel
  from .trellis2_gguf.modules.sparse import SparseTensor
@@ -89,7 +120,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  
  script_directory = os.path.dirname(os.path.abspath(__file__))
  comfy_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-@@ -64,6 +66,51 @@ os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"]="1"
+@@ -64,6 +67,51 @@ os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"]="1"
  
  to_pil = transforms.ToPILImage()
  
@@ -141,7 +172,31 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  class AnyType(str):
    """A special class that is always equal in not equal comparisons. Credit to pythongosssss"""
  
-@@ -365,6 +412,7 @@ class Trellis2_GGUFLoadModel:
+@@ -187,15 +235,20 @@ class ImageUtils:
+     def tensor_batch_to_pil_list(images: torch.Tensor, max_views: int = 4) -> list[Image.Image]:
+         """
+         Converts a ComfyUI IMAGE tensor (B,H,W,C) into a list of PIL images.
+-        Caps to max_views for safety.
++        Rejects batches above max_views instead of silently dropping views.
+         """
+         if not isinstance(images, torch.Tensor):
+             raise TypeError(f"Expected torch.Tensor for IMAGE, got {type(images)}")
+ 
+         if images.ndim == 4:
+             b = int(images.shape[0])
+-            n = min(b, int(max_views))
+-            return [ImageUtils.tensor_to_pil(images[i:i+1]) for i in range(n)]
++            limit = int(max_views)
++            if b > limit:
++                raise ValueError(
++                    f"IMAGE batch has {b} views but max_views is {limit}; "
++                    "refusing to silently discard views"
++                )
++            return [ImageUtils.tensor_to_pil(images[i:i+1]) for i in range(b)]
+ 
+         if images.ndim == 3:
+             return [ImageUtils.tensor_to_pil(images)]
+@@ -365,6 +418,7 @@ class Trellis2_GGUFLoadModel:
              "required": {
                  "modelname": (["TRELLIS.2-4B", "Pixal3D-GGUF"],),
                  "model_format": ([
@@ -149,7 +204,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                      "GGUF BF16",
                      "GGUF Q8_0", 
                      "GGUF Q6_K", 
-@@ -424,7 +472,18 @@ class Trellis2_GGUFLoadModel:
+@@ -424,7 +478,18 @@ class Trellis2_GGUFLoadModel:
          with open(pipeline_json_local, 'r') as f:
              pipeline_config = json.load(f)
  
@@ -169,7 +224,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          model_manager.ensure_model_files(model_format, pipeline_config, gguf_repo=repo_id)
  
          # ── Parse format for pipeline construction ────────────────────────
-@@ -462,6 +521,8 @@ class Trellis2_GGUFLoadModel:
+@@ -462,6 +527,8 @@ class Trellis2_GGUFLoadModel:
              sdnq_use_quantized_matmul=sdnq_use_quantized_matmul,
              sdnq_torch_compile=sdnq_torch_compile,
              sdnq_svd_rank=sdnq_svd_rank,
@@ -178,7 +233,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
              isPixal3D=isPixal3D,
          )
  
-@@ -540,6 +601,8 @@ class Trellis2_GGUFMeshWithVoxelGenerator:
+@@ -540,6 +607,8 @@ class Trellis2_GGUFMeshWithVoxelGenerator:
  
      def process(self, pipeline, image, seed, pipeline_type, sparse_structure_steps, shape_steps, texture_steps, max_num_tokens, max_views, sparse_structure_resolution, generate_texture_slat, use_tiled_decoder, sampler="euler"):
          CUDAUtils.reset()
@@ -187,7 +242,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          
          images = ImageUtils.tensor_batch_to_pil_list(image, max_views=max_views)
          image_in = images[0] if len(images) == 1 else images
-@@ -572,6 +635,25 @@ class Trellis2_GGUFMeshWithVoxelGenerator:
+@@ -572,6 +641,25 @@ class Trellis2_GGUFMeshWithVoxelGenerator:
          
          return (mesh, bvh,)    
  
@@ -213,7 +268,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  class Trellis2_GGUFLoadImageWithTransparency:
      @classmethod
      def INPUT_TYPES(s):
-@@ -861,6 +943,63 @@ class Trellis2_GGUFMeshWithVoxelToTrimesh:
+@@ -861,6 +949,63 @@ class Trellis2_GGUFMeshWithVoxelToTrimesh:
          
          return (trimesh,)
          
@@ -277,7 +332,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  class Trellis2_GGUFExportMesh:
      @classmethod
      def INPUT_TYPES(s):
-@@ -889,6 +1028,14 @@ class Trellis2_GGUFExportMesh:
+@@ -889,6 +1034,14 @@ class Trellis2_GGUFExportMesh:
                  trimesh.visual.material.name = f"{filename}_{counter:05}"
  
              trimesh.export(output_glb_path, file_type=file_format, mtl_name=materialName)
@@ -292,7 +347,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          else:
              trimesh.export(output_glb_path, file_type=file_format)
              
-@@ -1046,7 +1193,7 @@ class Trellis2_GGUFUnWrapAndRasterizer:
+@@ -1046,7 +1199,7 @@ class Trellis2_GGUFUnWrapAndRasterizer:
                  "texture_alpha_mode": (["OPAQUE","MASK","BLEND"],{"default":"OPAQUE"}),
                  "double_side_material": ("BOOLEAN",{"default":False}),
                  "bake_on_vertices": ("BOOLEAN",{"default":False}),
@@ -301,7 +356,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                  "uv_unwrap_method": (["Xatlas", "Blender", "Smart"],{"default":"Xatlas"}),
                  "bvh": ("BVH",),                
              }
-@@ -1251,32 +1398,10 @@ class Trellis2_GGUFUnWrapAndRasterizer:
+@@ -1251,32 +1404,10 @@ class Trellis2_GGUFUnWrapAndRasterizer:
          cumesh.compute_vertex_normals()
          out_normals = cumesh.read_vertex_normals()[out_vmaps]        
  
@@ -337,7 +392,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -1321,6 +1446,7 @@ class Trellis2_GGUFUnWrapAndRasterizer:
+@@ -1321,6 +1452,7 @@ class Trellis2_GGUFUnWrapAndRasterizer:
          metallicRoughnessTexture_np = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
          
          material = Trimesh.visual.material.PBRMaterial(
@@ -345,7 +400,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
              baseColorTexture=baseColorTexture_np,
              baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
              metallicRoughnessTexture=metallicRoughnessTexture_np,
-@@ -1640,7 +1766,7 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1640,7 +1772,7 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
                  "double_side_material": ("BOOLEAN",{"default":False}),
                  "remove_floaters": ("BOOLEAN",{"default":True}),
                  "bake_on_vertices": ("BOOLEAN",{"default":False}),
@@ -354,7 +409,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                  "uv_unwrap_method": (["Xatlas", "Blender", "Smart"],{"default":"Xatlas"}),
                  "bvh": ("BVH",),
                  "remove_inner_faces": ("BOOLEAN",{"default":True}),
-@@ -1695,13 +1821,52 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1695,13 +1827,52 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
              
          vertices = mesh_copy.vertices
          faces = mesh_copy.faces
@@ -412,7 +467,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          print(f"Current vertices: {cumesh.num_vertices}, faces: {cumesh.num_faces}")        
              
          pbar.update(1)
-@@ -1786,52 +1951,40 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1786,52 +1957,40 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
              pbar.update(1)
              
          if fill_holes:
@@ -497,7 +552,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          
          # --- Branch: Bake On Vertices (skip UV unwrapping and texture creation) ---
          if bake_on_vertices:
-@@ -1983,29 +2136,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -1983,29 +2142,9 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
          out_normals = cumesh.read_vertex_normals()[out_vmaps]        
  
          print("Sampling attributes...")
@@ -530,7 +585,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          
          # Map these positions back to the *original* high-res mesh to get accurate attributes
          # This corrects geometric errors introduced by simplification/remeshing
-@@ -2061,6 +2194,7 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
+@@ -2061,6 +2200,7 @@ class Trellis2_GGUFPostProcessAndUnWrapAndRasterizer:
          baseColorTexture_np = Image.fromarray(np.concatenate([base_color, alpha], axis=-1))
          metallicRoughnessTexture_np = Image.fromarray(np.concatenate([np.zeros_like(metallic), roughness, metallic], axis=-1))
          material = Trimesh.visual.material.PBRMaterial(
@@ -538,7 +593,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
              baseColorTexture=baseColorTexture_np,
              baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
              metallicRoughnessTexture=metallicRoughnessTexture_np,
-@@ -2329,7 +2463,7 @@ class Trellis2_GGUFMeshTexturing:
+@@ -2329,7 +2469,7 @@ class Trellis2_GGUFMeshTexturing:
                  "texture_guidance_interval_end": ("FLOAT",{"default":0.90,"min":0.00,"max":1.00,"step":0.01}),
                  "max_views": ("INT", {"default": 4, "min": 1, "max": 16}),
                  "bake_on_vertices": ("BOOLEAN",{"default":False}),
@@ -547,7 +602,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                  "uv_unwrap_method": (["Xatlas", "Blender", "Smart"],{"default":"Xatlas"}),
                  "mesh_cluster_threshold_cone_half_angle_rad": ("FLOAT",{"default":60.0,"min":0.0,"max":359.9}),
                  "use_tiled_encoder": ("BOOLEAN", {"default": False}),
-@@ -2406,7 +2540,7 @@ class Trellis2_GGUFMeshTexturingMultiView:
+@@ -2406,7 +2546,7 @@ class Trellis2_GGUFMeshTexturingMultiView:
                  "texture_guidance_interval_start": ("FLOAT",{"default":0.00,"min":0.00,"max":1.00,"step":0.01}),
                  "texture_guidance_interval_end": ("FLOAT",{"default":0.90,"min":0.00,"max":1.00,"step":0.01}),
                  "bake_on_vertices": ("BOOLEAN",{"default":False}),
@@ -556,7 +611,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                  "uv_unwrap_method": (["Xatlas", "Blender", "Smart"],{"default":"Xatlas"}),
                  "mesh_cluster_threshold_cone_half_angle_rad": ("FLOAT",{"default":60.0,"min":0.0,"max":359.9}),
                  "front_axis": (["z", "x"], {"default": "z"}),
-@@ -2532,6 +2666,11 @@ class Trellis2_GGUFLoadMesh:
+@@ -2532,6 +2672,11 @@ class Trellis2_GGUFLoadMesh:
          
          return (trimesh,)  
          
@@ -568,7 +623,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  class Trellis2_GGUFPreProcessImage:
      @classmethod
      def INPUT_TYPES(s):
-@@ -2554,7 +2693,7 @@ class Trellis2_GGUFPreProcessImage:
+@@ -2554,7 +2699,7 @@ class Trellis2_GGUFPreProcessImage:
          if remove_background:
              from rembg import remove
              image = remove(image)
@@ -577,7 +632,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
          image = self.preprocess_image(image)
          
          if padding>0:
-@@ -2582,42 +2721,7 @@ class Trellis2_GGUFPreProcessImage:
+@@ -2582,42 +2727,7 @@ class Trellis2_GGUFPreProcessImage:
  
  
      def preprocess_image(self, input: Image.Image) -> Image.Image:
@@ -621,7 +676,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
  
  class Trellis2_GGUFMeshRefiner:
      @classmethod
-@@ -3272,7 +3376,16 @@ class Trellis2_GGUFBatchSimplifyMeshAndExport:
+@@ -3272,7 +3382,16 @@ class Trellis2_GGUFBatchSimplifyMeshAndExport:
                  output_glb_path = Path(full_output_folder, f'{filename}_{counter:05}_.{file_format}')
                  output_glb_path.parent.mkdir(exist_ok=True)
                  
@@ -639,7 +694,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
                  
                  lst_output_mesh.append(str(output_glb_path))
  
-@@ -3903,6 +4016,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
+@@ -3903,6 +4022,12 @@ class Trellis2_GGUFSimplifyTrimeshAdvanced:
          return (new_mesh,)
  
  NODE_CLASS_MAPPINGS = {
@@ -652,7 +707,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
      "Trellis2LoadModel_GGUF": Trellis2_GGUFLoadModel,
      "Trellis2MeshWithVoxelGenerator_GGUF": Trellis2_GGUFMeshWithVoxelGenerator,
      "Trellis2LoadImageWithTransparency_GGUF": Trellis2_GGUFLoadImageWithTransparency,
-@@ -3952,12 +4071,18 @@ NODE_CLASS_MAPPINGS = {
+@@ -3952,12 +4077,18 @@ NODE_CLASS_MAPPINGS = {
      
  
  NODE_DISPLAY_NAME_MAPPINGS = {
@@ -676,7 +731,7 @@ index e1dda3a549a093fa5660cf58273cd8f3ed224770..af11c575801c23f4c7f1398f707102b2
      "Trellis2PostProcessMesh_GGUF": "Trellis2 - PostProcess Mesh (using Cumesh) (GGUF)",
      "Trellis2UnWrapAndRasterizer_GGUF": "Trellis2 - UV Unwrap and Rasterize (GGUF)",
      "Trellis2MeshWithVoxelAdvancedGenerator_GGUF": "Trellis2 - Mesh With Voxel Advanced Generator (GGUF)",
-@@ -3965,7 +4090,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
+@@ -3965,7 +4096,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
      "Trellis2Remesh_GGUF": "Trellis2 - Remesh (GGUF)",
      "Trellis2MeshTexturing_GGUF": "Trellis2 - Mesh Texturing (GGUF)",
      "Trellis2LoadMesh_GGUF": "Trellis2 - Load Mesh (GGUF)",
@@ -975,7 +1030,7 @@ index f60f0521ac268289705c9c9a37793dd0900dab8b..04589324f72982f1472a0fdd15156db6
 diff --git a/trellis2_gguf/pipelines/trellis2_image_to_3d.py b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 old mode 100644
 new mode 100755
-index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b1c9bdde7
+index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a63f20960cefd947d28fe1bf1c6cde7ae8f78f4e
 --- a/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 +++ b/trellis2_gguf/pipelines/trellis2_image_to_3d.py
 @@ -21,6 +21,8 @@ import nvdiffrast.torch as dr
@@ -987,7 +1042,29 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
  
  import random
  
-@@ -285,6 +287,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -29,6 +31,21 @@ from comfy.utils import ProgressBar
+ def pil2tensor(image):
+     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0)[None,]
+ 
++
++def _require_single_projected_view(image) -> None:
++    if isinstance(image, torch.Tensor):
++        views = int(image.shape[0]) if image.ndim > 0 else 0
++    elif isinstance(image, (list, tuple)):
++        views = len(image)
++    else:
++        views = 1
++    if views != 1:
++        raise ValueError(
++            "Projected Pixel3D conditioning currently supports exactly one view; "
++            f"received {views}. Use a non-projected multi-view pipeline instead."
++        )
++
++
+ def seed_all(seed: int = 0):
+     """
+     Set random seeds of all components.
+@@ -285,6 +302,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                          enable_sdnq: bool = False, sdnq_use_quantized_matmul: bool = True,
                          sdnq_torch_compile: bool = False,
                          sdnq_svd_rank: int = 32,
@@ -995,7 +1072,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                          isPixal3D: bool = False) -> "Trellis2ImageTo3DPipeline":
          """
          Load a pretrained model.
-@@ -332,6 +335,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -332,6 +350,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
          pipeline.sdnq_use_quantized_matmul = sdnq_use_quantized_matmul
          pipeline.sdnq_torch_compile = sdnq_torch_compile
          pipeline.sdnq_svd_rank = sdnq_svd_rank
@@ -1004,7 +1081,23 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
          pipeline.isPixal3D = isPixal3D
  
          pipeline._pretrained_args['models']['sparse_structure_decoder'] = os.path.join(folder_paths.models_dir,"Trellis2","decoders","Stage1","ss_dec_conv3d_16l8_fp16")
-@@ -613,15 +618,21 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -439,6 +459,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         Returns:
+             dict with 'cond' and 'neg_cond', each containing {'global': ..., 'proj': ...}
+         """
++        _require_single_projected_view(image)
+         print('Getting Proj Image Cond ...')
+         device = self.device
+         # Use MoGe to estimate camera params from the image when available
+@@ -494,6 +515,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         Returns:
+             dict with 'cond' and 'neg_cond', each containing {'global': ..., 'proj': SparseTensor}
+         """
++        _require_single_projected_view(image)
+         print('Getting Projected Image Cond ...')
+         device = self.device
+         # Use MoGe to estimate camera params from the image when available
+@@ -613,15 +635,21 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                                  tile_factor=int(K),
                              )
  
@@ -1034,7 +1127,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                      
                      global_features = torch.cat([z_clstoken, z_regtokens], dim=1)
                      return global_features, z_proj
-@@ -732,6 +743,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -732,6 +760,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -1043,7 +1136,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['sparse_structure_flow_model'].eval()
-@@ -779,6 +792,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -779,6 +809,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -1052,7 +1145,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['shape_slat_flow_model_512'].eval()
-@@ -804,6 +819,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -804,6 +836,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -1061,7 +1154,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['tex_slat_flow_model_512'].eval()
-@@ -853,7 +870,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -853,7 +887,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
              self.models['shape_slat_decoder'] = None
              self._cleanup_cuda()
  
@@ -1070,7 +1163,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
          if self.models['shape_slat_flow_model_1024'] is None:
              print('Loading Shape Slat Flow 1024 model ...')
              _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['shape_slat_flow_model_1024']))
-@@ -865,6 +882,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -865,6 +899,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -1079,7 +1172,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['shape_slat_flow_model_1024'].eval()
-@@ -876,7 +895,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -876,7 +912,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
              self.models['shape_slat_flow_model_1024'] = None
              self._cleanup_cuda()
  
@@ -1088,7 +1181,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
          if self.models['tex_slat_flow_model_1024'] is None:
              print('Loading Texture Slat Flow 1024 model ...')
              _path = self._sdnq_remap(os.path.join(self.path, self._pretrained_args['models']['tex_slat_flow_model_1024']))
-@@ -888,6 +907,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -888,6 +924,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  enable_sdnq=getattr(self, 'enable_sdnq', False),
                  sdnq_use_quantized_matmul=getattr(self, 'sdnq_use_quantized_matmul', True),
                  sdnq_torch_compile=getattr(self, 'sdnq_torch_compile', False),
@@ -1097,7 +1190,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
                  isPixal3D=getattr(self, 'isPixal3D', False),
              )
              self.models['tex_slat_flow_model_1024'].eval()
-@@ -924,41 +945,26 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -924,41 +962,26 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  self.rembg_model.to(device)
  
      def preprocess_image(self, input: Image.Image) -> Image.Image:
@@ -1151,7 +1244,101 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
          
      def get_cond(
          self,
-@@ -3001,8 +3007,13 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -985,30 +1008,38 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         Returns:
+             dict with keys: cond (+ neg_cond if include_neg_cond)
+         """
+-        self.image_cond_model.image_size = resolution
+-
+         # ---- Normalize input into what image_cond_model expects ----
+         # Most implementations expect PIL image or list[PIL images].
+         if isinstance(image, torch.Tensor):
+             # Expect ComfyUI IMAGE tensor: (B,H,W,C) float in [0,1]
+             if image.ndim == 4:
++                view_count = int(image.shape[0])
++                if not 1 <= view_count <= int(max_views):
++                    raise ValueError(
++                        f"get_cond() received {view_count} views with max_views={int(max_views)}; "
++                        "refusing to silently discard views"
++                    )
+                 # Lazy import to avoid circulars if tensor2pil is in nodes/utils
+                 from .nodes import tensor2pil 
+-                images = [tensor2pil(image[i]) for i in range(min(int(image.shape[0]), max_views))]
++                images = [tensor2pil(image[i]) for i in range(view_count)]
+             else:
+                 raise ValueError(f"Expected image tensor with shape (B,H,W,C), got {tuple(image.shape)}")
+         elif isinstance(image, Image.Image):
+             images = [image]
+         elif isinstance(image, (list, tuple)):
+             # list of PIL images
+-            images = list(image)[:max_views]
+-            if not images:
+-                raise ValueError("Empty image list provided to get_cond().")
++            images = list(image)
++            if not 1 <= len(images) <= int(max_views):
++                raise ValueError(
++                    f"get_cond() received {len(images)} views with max_views={int(max_views)}; "
++                    "refusing to silently discard views"
++                )
+             if not all(isinstance(im, Image.Image) for im in images):
+                 raise TypeError("get_cond() received a list/tuple but not all elements are PIL Images.")
+         else:
+             raise TypeError(f"Unsupported image type for get_cond(): {type(image)}")
+ 
++        self.image_cond_model.image_size = resolution
+         if self.low_vram:
+             self.image_cond_model.to(self.device)
+ 
+@@ -1634,6 +1665,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         else:
+             images = [image]
+ 
++        if self.isPixal3D:
++            _require_single_projected_view(images)
++
+         if preprocess_image:
+             images = [self.preprocess_image(im) for im in images]
+             
+@@ -1643,6 +1677,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         self.load_sparse_structure_model()
+         ss_model = self.models['sparse_structure_flow_model']
+         ss_attn_mode = getattr(ss_model, 'image_attn_mode', None)
++        if ss_attn_mode == 'proj':
++            _require_single_projected_view(images)
+ 
+         # Get Image Cond
+         self.load_image_cond_model()
+@@ -1973,6 +2009,11 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         """
+         Run the pipeline with named multi-view images and spatial blending.
+         """
++        if self.isPixal3D:
++            raise ValueError(
++                "Named multi-view generation does not support projected Pixel3D conditioning; "
++                "use the standard pipeline with exactly one view"
++            )
+         if pipeline_type is None:
+             pipeline_type = self.default_pipeline_type
+         
+@@ -2757,6 +2798,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+             images = list(image)
+         else:
+             images = [image]
++        if self.isPixal3D:
++            _require_single_projected_view(images)
+             
+         seed_all(seed)
+         
+@@ -2764,6 +2807,8 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+         self.load_sparse_structure_model()
+         ss_model = self.models['sparse_structure_flow_model']
+         ss_attn_mode = getattr(ss_model, 'image_attn_mode', None)
++        if ss_attn_mode == 'proj':
++            _require_single_projected_view(images)
+ 
+         # Get Image Cond
+         self.load_image_cond_model()
+@@ -3001,8 +3046,13 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  pbr_voxel = pbr_voxel.cpu()
                  self._cleanup_cuda()
  
@@ -1166,7 +1353,7 @@ index f3eb7dd80291707a169945c54d9e1f02c2e2874b..a00e4bb23370278405e6713f295bfd4b
              print('Unwrapping mesh ...')
              
              if uv_unwrap_method == 'Blender':
-@@ -3172,24 +3183,36 @@ class Trellis2ImageTo3DPipeline(Pipeline):
+@@ -3172,24 +3222,36 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                  
          # rasterize
          print('Finalizing mesh ...')
